@@ -72,7 +72,7 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
 <a id="中文"></a>
 ## 中文
 
-用于制作类似 App Store 、X、instagram、RedNote 等等平台宣传物料的桌面工具，生成你需要宣传的workflow和功能，降低成本的同时极大加速你的宣发速度：动态背景、iPhone 外框、屏幕图片或视频、可拖拽的文字与品牌水印，以及多种比例下导出 PNG、JPEG 或 MP4。界面语言可在左侧 **English** / **中文** 之间切换。
+用于制作类似 App Store 、X、instagram、小红书等等平台宣传物料的桌面工具，生成你需要宣传的workflow和功能，降低成本的同时极大加速你的宣发速度：动态背景、iPhone 外框、屏幕图片或视频、可拖拽的文字与品牌水印，以及多种比例下导出 PNG、JPEG 或 MP4。界面语言可在左侧 **English** / **中文** 之间切换。
 
 ### 功能说明
 
@@ -81,20 +81,15 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
 - **用代码编辑背景** — 在背景预设列表中选择 **自定义代码**（英文界面下为 **Custom code**）。每帧会执行你的 Python 绘制脚本，与内置背景的渲染方式一致：
   - 脚本中可使用 **`painter`**（`QPainter`）、画布 **`width`** / **`height`**、时间 **`t`**（也可用 **`time`**）驱动动画。
   - 环境内注入常用 **Qt** 类型（`QColor`、`QLinearGradient`、`QRadialGradient`、`QPainterPath`、`QPen`、`QBrush`、`QFont`、`QPointF`、`QRectF`、`Qt` 等）、**`math`**、已安装时的 **`numpy`（`np`）**，以及 **`vortex_offset`**、噪声/类 FBM 等辅助函数和可在脚本顶部覆盖的默认参数（强度、漂移等）。
-  - 如果你不会代码，请把内置示例模版、你的画面需求，以及下文 **「自定义代码：给他人 / 给 AI 的硬性说明」** 整段一并交给 AI，再把生成代码贴进编辑器——可避免出现只写 `def` 不调用、只用 `cv2.imshow`、`frame_index` 等与 TangiPromo 环境不符的代码。
+  - 如果你不会代码，请把内置示例模版、你的画面需求，以及**下文各条**（`exec`、`painter`、`t`、勿依赖 `__main__` 等）一并交给 AI，再把生成代码贴进编辑器——可避免出现只写 `def` 不调用、只用 `cv2.imshow`、`frame_index` 等与 TangiPromo 环境不符的代码。
   - 点击 **应用** 立即编译运行；停止编辑约片刻后也会自动应用（详见界面内提示）。
   - **保存** / **删除** 命名预设：代码会保存在本机应用数据目录下的 JSON 中（Qt 为 TangiPromo 分配的 `AppDataLocation`）。
-
-#### 自定义代码：给他人 / 给 AI 的硬性说明（避免生成无法运行的代码）
-
-把下面要点一并贴给 AI，可大幅减少「复制进 TangiPromo 不显示」的情况：
-
-- **运行方式：** 每一帧 TangiPromo 会对你的整段脚本做一次 **`exec`**，**不是**执行 `python 某某.py`。只有你写在**同一脚本顶层**、或**自己调用**的函数里的代码才会跑；**仅定义** `def generate_...(): ...` **从不调用**时，背景不会有任何绘制。
-- **输出方式：** 程序**不会读取返回值**。必须在注入的 **`painter`** 上绘制（或拼好 **`QImage` 再 `painter.drawImage`**）。只 **`return` NumPy/OpenCV 图像**、只用 **`cv2.imshow`**、只用 **Matplotlib 弹窗** 都不会成为 TangiPromo 里的背景。
-- **`if __name__ == "__main__":`** 在嵌入执行时 **`__name__` 往往不等于 `"__main__"`**，里面的预览循环通常**根本不会执行**；请把绘制逻辑放在模块顶层，或在顶层**显式调用**你的函数。
-- **时间变量：** 请使用注入的 **`t`**（随时间递增的浮点数，量级接近秒）。环境里没有现成的 **`frame_index` / `total_frames`**；若需要循环相位，请用 **`t`** 自行换算（例如 `sin(t * k)`）。
-- **库：** 安装了 NumPy 时可用 **`np`**。背景**不依赖** OpenCV；若 AI 只给出 `cv2` + `imshow` 脚本，请要求它改为 **`painter` + Qt**（或 **NumPy → `QImage` → `drawImage`**），并明确使用 **`width`、`height`、`t`**。
-- **最低约定：** 合法自定义代码 = 执行后能用 **`painter`、`width`、`height`、`t`**（及可选 **`time`**）画满当前帧的片段。
+  - **运行方式：** 每一帧 TangiPromo 会对你的整段脚本做一次 **`exec`**，**不是**执行 `python 某某.py`。只有你写在**同一脚本顶层**、或**自己调用**的函数里的代码才会跑；**仅定义** `def generate_...(): ...` **从不调用**时，背景不会有任何绘制。
+  - **输出方式：** 程序**不会读取返回值**。必须在注入的 **`painter`** 上绘制（或拼好 **`QImage` 再 `painter.drawImage`**）。只 **`return` NumPy/OpenCV 图像**、只用 **`cv2.imshow`**、只用 **Matplotlib 弹窗** 都不会成为 TangiPromo 里的背景。
+  - **`if __name__ == "__main__":`** 在嵌入执行时 **`__name__` 往往不等于 `"__main__"`**，里面的预览循环通常**根本不会执行**；请把绘制逻辑放在模块顶层，或在顶层**显式调用**你的函数。
+  - **时间变量：** 请使用注入的 **`t`**（随时间递增的浮点数，量级接近秒）。环境里没有现成的 **`frame_index` / `total_frames`**；若需要循环相位，请用 **`t`** 自行换算（例如 `sin(t * k)`）。
+  - **库：** 安装了 NumPy 时可用 **`np`**。背景**不依赖** OpenCV；若 AI 只给出 `cv2` + `imshow` 脚本，请要求它改为 **`painter` + Qt**（或 **NumPy → `QImage` → `drawImage`**），并明确使用 **`width`、`height`、`t`**。
+  - **最低约定：** 合法自定义代码 = 执行后能用 **`painter`、`width`、`height`、`t`**（及可选 **`time`**）画满当前帧的片段。
 
 **其余功能**
 
