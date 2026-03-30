@@ -115,16 +115,65 @@ class ExportWorker(QThread):
                 self.error.emit(tr("export.err.writer", path=self.path))
                 return
 
+            src_fps = float(self.canvas.video_fps())
+            src_dur = self.canvas.imported_video_duration_sec()
+
+            def _clamp_src_time(tt: float) -> float:
+                if src_dur is not None and src_dur > 0 and src_fps > 1e-6:
+                    return min(max(0.0, tt), src_dur - 0.5 / src_fps)
+                return max(0.0, tt)
+
+            # When exporting a video, decoding by seeking for every frame
+            # (CAP_PROP_POS_FRAMES + read) may land on the same/nearby frame,
+            # especially on 4K sources/codecs. We sacrifice some speed and
+            # decode sequentially after a single initial seek.
+            current_idx: int | None = None
+            current_pm = None
+            eof = False
+
+            if export_cap is not None and src_fps > 1e-6:
+                # Initialize to the first output frame's nearest input frame.
+                t0 = _clamp_src_time(0.0)
+                idx0 = int(t0 * src_fps + 0.5)
+                export_cap.set(cv2.CAP_PROP_POS_FRAMES, idx0)
+                ret, frame = export_cap.read()
+                if ret:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
+                    h, w, c = frame_rgb.shape
+                    img0 = QImage(
+                        frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
+                    ).copy()
+                    current_pm = QPixmap.fromImage(img0)
+                    current_idx = idx0
+                else:
+                    eof = True
+                    current_idx = idx0
+
             for i in range(total):
                 t = i / self.fps
-                if export_cap is not None:
-                    pm = _decode_frame_at_time(
-                        export_cap,
-                        t,
-                        self.canvas.video_fps(),
-                        self.canvas.imported_video_duration_sec(),
-                    )
-                    self.canvas.video_frame = pm
+
+                if export_cap is not None and src_fps > 1e-6 and not eof:
+                    tt = _clamp_src_time(t)
+                    target_idx = int(tt * src_fps + 0.5)
+
+                    # Decode forward until we reach the nearest frame.
+                    while current_idx is not None and current_idx < target_idx:
+                        ret, frame = export_cap.read()
+                        if not ret:
+                            eof = True
+                            break
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
+                        h, w, c = frame_rgb.shape
+                        img = QImage(
+                            frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
+                        ).copy()
+                        current_pm = QPixmap.fromImage(img)
+                        current_idx += 1
+
+                    self.canvas.video_frame = current_pm
+                elif export_cap is not None:
+                    # Fallback (e.g. init failed): keep last frame (or None).
+                    self.canvas.video_frame = current_pm
 
                 img = QImage(ow, oh, QImage.Format.Format_RGB32)
                 _paint_export_frame(self.canvas, img, ow, oh, t)
