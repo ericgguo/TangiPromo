@@ -1324,12 +1324,28 @@ class MainWindow(QMainWindow):
         else:
             w, h = RESOLUTIONS.get(res_key, (1920, 1080))
 
-        # Adjust W/H to match selected output ratio
+        # Adjust W/H to match selected output ratio.
+        # Note: RESOLUTIONS presets already contain aspect-ratio-specific pixel sizes,
+        # but the canvas output ratio can be changed independently. Historically we kept
+        # height and recomputed width, which breaks "4K" expectations for non-16:9 ratios.
+        # Fix: when exporting "4K" presets, preserve the long side (max(w, h)) as 4K.
         rw, rh = self._canvas.output_ratio
-        # Keep height, recompute width
-        h_new = h
-        w_new = int(h_new * rw / rh)
-        w, h = w_new, h_new
+        if res_key and "4K" in str(res_key):
+            long_side = max(int(w), int(h))
+            if rw >= rh:
+                # Landscape / square: long side is width
+                w_new = long_side
+                h_new = int(round(w_new * rh / rw))
+            else:
+                # Portrait: long side is height
+                h_new = long_side
+                w_new = int(round(h_new * rw / rh))
+            w, h = max(1, w_new), max(1, h_new)
+        else:
+            # Default behavior: keep height, recompute width
+            h_new = int(h)
+            w_new = int(round(h_new * rw / rh))
+            w, h = max(1, w_new), max(1, h_new)
 
         if fmt_idx == 0:
             path, _ = QFileDialog.getSaveFileName(
