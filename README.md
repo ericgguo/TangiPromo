@@ -16,9 +16,23 @@ Desktop tool for promo assets on platforms like the App Store, X, Instagram, Red
 - **Custom background via Python** — In the background list, choose **Custom code** (中文界面下为 **自定义代码**). The editor runs a drawing script each frame, same idea as the built-in generators:
   - Your code receives **`painter`** (a `QPainter`), canvas **`width`** / **`height`**, and animation time **`t`** (also exposed as **`time`**).
   - Injected APIs include common **Qt** types (`QColor`, `QLinearGradient`, `QRadialGradient`, `QPainterPath`, `QPen`, `QBrush`, `QFont`, `QPointF`, `QRectF`, `Qt`, …), **`math`**, **`numpy` as `np`** when NumPy is installed, plus helpers such as **`vortex_offset`**, noise/FBM-style utilities, and tunable defaults (e.g. strength/drift parameters you can override at the top of your script).
-  - If you are not comfortable coding, share the built-in sample template and your background/motion ideas with any AI assistant, then paste the generated code into the editor—you can get results quickly.
+  - If you are not comfortable coding, share the built-in sample template **and** the **“Custom code: details for you and for AI assistants”** checklist below with any AI assistant, then paste the generated code into the editor—this avoids non-running snippets (e.g. OpenCV-only previews, uncalled `def`, wrong time variables).
   - Click **Apply** to compile and run; after you stop typing for a short moment, changes can also apply automatically (see the in-app tooltip).
   - **Save** / **Delete** named presets: snippets are stored locally as JSON under the app’s data directory (Qt `AppDataLocation` for TangiPromo).
+
+#### Custom code: details for you and for AI assistants
+
+Paste the following into your AI prompt so generated code actually runs inside TangiPromo:
+
+- **How it runs:** Each animation frame, TangiPromo **`exec`s your whole script** in a sandboxed namespace. It does **not** run `python yourfile.py`. There is **no** call to a function you define unless **you** call it from top-level code in the same snippet.
+- **Output:** The app **ignores return values**. You must **draw on the injected `painter`** (or build a `QImage` and `painter.drawImage(...)`). Patterns that only **`return` a NumPy/OpenCV array** or use **`cv2.imshow` / Matplotlib `show()`** will not show as the background.
+- **`if __name__ == "__main__":`** Often **does not run** in this embedded context, so preview loops there will never execute—keep the drawing logic at module level or behind an explicit function **that you call**.
+- **Time variable:** Use the injected **`t`** (a float that increases over time, roughly seconds). Do **not** assume `frame_index` / `total_frames` exist unless you derive phase from **`t`** yourself (e.g. `sin(t * k)`).
+- **Libraries:** **`np`** is available when NumPy is installed. **OpenCV (`cv2`)** is not required for backgrounds; if the model generates OpenCV-only preview code, ask it to **port to `painter` + Qt** (or NumPy → `QImage` → `drawImage`) using **`width`**, **`height`**, and **`t`**.
+- **Minimal contract:** Valid custom code is any snippet that, when executed, uses **`painter`**, **`width`**, **`height`**, and **`t`** (and optional `time`) to paint the full frame.
+
+**Other features**
+
 - **iPhone** — Model and color, position and scale as % of the canvas; optional show/hide; **Center phone** snaps to the middle. Need another device frame? Add and integrate it yourself.
 - **Screen content** — Load a still or a video into the device screen area.
 - **Text layers** — Multiple layers, font, size, color, alignment, shadow/outline; drag on the canvas.
@@ -67,9 +81,23 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
 - **用代码编辑背景** — 在背景预设列表中选择 **自定义代码**（英文界面下为 **Custom code**）。每帧会执行你的 Python 绘制脚本，与内置背景的渲染方式一致：
   - 脚本中可使用 **`painter`**（`QPainter`）、画布 **`width`** / **`height`**、时间 **`t`**（也可用 **`time`**）驱动动画。
   - 环境内注入常用 **Qt** 类型（`QColor`、`QLinearGradient`、`QRadialGradient`、`QPainterPath`、`QPen`、`QBrush`、`QFont`、`QPointF`、`QRectF`、`Qt` 等）、**`math`**、已安装时的 **`numpy`（`np`）**，以及 **`vortex_offset`**、噪声/类 FBM 等辅助函数和可在脚本顶部覆盖的默认参数（强度、漂移等）。
-  - 如果你不会代码，把预设模版和你的背景动画需求交给任何AI，然后把它们生成的代码复制进对话框，很快就能搞定。
+  - 如果你不会代码，请把内置示例模版、你的画面需求，以及下文 **「自定义代码：给他人 / 给 AI 的硬性说明」** 整段一并交给 AI，再把生成代码贴进编辑器——可避免出现只写 `def` 不调用、只用 `cv2.imshow`、`frame_index` 等与 TangiPromo 环境不符的代码。
   - 点击 **应用** 立即编译运行；停止编辑约片刻后也会自动应用（详见界面内提示）。
   - **保存** / **删除** 命名预设：代码会保存在本机应用数据目录下的 JSON 中（Qt 为 TangiPromo 分配的 `AppDataLocation`）。
+
+#### 自定义代码：给他人 / 给 AI 的硬性说明（避免生成无法运行的代码）
+
+把下面要点一并贴给 AI，可大幅减少「复制进 TangiPromo 不显示」的情况：
+
+- **运行方式：** 每一帧 TangiPromo 会对你的整段脚本做一次 **`exec`**，**不是**执行 `python 某某.py`。只有你写在**同一脚本顶层**、或**自己调用**的函数里的代码才会跑；**仅定义** `def generate_...(): ...` **从不调用**时，背景不会有任何绘制。
+- **输出方式：** 程序**不会读取返回值**。必须在注入的 **`painter`** 上绘制（或拼好 **`QImage` 再 `painter.drawImage`**）。只 **`return` NumPy/OpenCV 图像**、只用 **`cv2.imshow`**、只用 **Matplotlib 弹窗** 都不会成为 TangiPromo 里的背景。
+- **`if __name__ == "__main__":`** 在嵌入执行时 **`__name__` 往往不等于 `"__main__"`**，里面的预览循环通常**根本不会执行**；请把绘制逻辑放在模块顶层，或在顶层**显式调用**你的函数。
+- **时间变量：** 请使用注入的 **`t`**（随时间递增的浮点数，量级接近秒）。环境里没有现成的 **`frame_index` / `total_frames`**；若需要循环相位，请用 **`t`** 自行换算（例如 `sin(t * k)`）。
+- **库：** 安装了 NumPy 时可用 **`np`**。背景**不依赖** OpenCV；若 AI 只给出 `cv2` + `imshow` 脚本，请要求它改为 **`painter` + Qt**（或 **NumPy → `QImage` → `drawImage`**），并明确使用 **`width`、`height`、`t`**。
+- **最低约定：** 合法自定义代码 = 执行后能用 **`painter`、`width`、`height`、`t`**（及可选 **`time`**）画满当前帧的片段。
+
+**其余功能**
+
 - **iPhone** — 机型与颜色、位置与缩放（画布百分比）、显示开关；**一键居中** 将手机置于画布中心。如果你需要其他设备的适配，请自行添加。
 - **屏幕内容** — 为屏幕区域加载静态图或视频。
 - **文字图层** — 多图层、字体、字号、颜色、对齐、阴影/描边；在画布上拖动摆放。
