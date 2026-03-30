@@ -7,7 +7,7 @@
 <a id="english"></a>
 ## English
 
-Desktop tool for promo assets on platforms like the App Store, X, Instagram, Xiaohongshu (Little Red Book), and similar—build the workflows and feature shots you need for marketing, lower cost, and ship creatives much faster: animated backgrounds, iPhone frames, screen image or video, draggable text and **brand** watermarks, and export to PNG, JPEG, or MP4 in multiple aspect ratios. Switch **English** / **中文** in the left sidebar.
+Desktop tool for promo assets on platforms like the App Store, X, Instagram, RedNote, and similar—build the workflows and feature shots you need for marketing, lower cost, and ship creatives much faster: animated backgrounds, iPhone frames, screen image or video, draggable text and **brand** watermarks, and export to PNG, JPEG, or MP4 in multiple aspect ratios. Switch **English** / **中文** in the left sidebar.
 
 ### What you can do
 
@@ -58,7 +58,7 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
 <a id="中文"></a>
 ## 中文
 
-用于制作类似 App Store 、X、instagram、小红书等等平台宣传物料的桌面工具，生成你需要宣传的workflow和功能，降低成本的同时极大加速你的宣发速度：动态背景、iPhone 外框、屏幕图片或视频、可拖拽的文字与品牌水印，以及多种比例下导出 PNG、JPEG 或 MP4。界面语言可在左侧 **English** / **中文** 之间切换。
+用于制作类似 App Store 、X、instagram、RedNote 等等平台宣传物料的桌面工具，生成你需要宣传的workflow和功能，降低成本的同时极大加速你的宣发速度：动态背景、iPhone 外框、屏幕图片或视频、可拖拽的文字与品牌水印，以及多种比例下导出 PNG、JPEG 或 MP4。界面语言可在左侧 **English** / **中文** 之间切换。
 
 ### 功能说明
 
