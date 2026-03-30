@@ -1,7 +1,7 @@
 import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPalette, QColor, QFont
+from PySide6.QtGui import QPalette, QColor, QFont, QFontDatabase
 from src.main_window import MainWindow
 
 DARK_STYLESHEET = """
@@ -9,7 +9,7 @@ QWidget {
     background-color: #141416;
     color: #f2f2f7;
     font-size: 13px;
-    font-family: "Helvetica Neue", "PingFang SC", "SF Pro Text", sans-serif;
+    font-family: "Helvetica Neue", "PingFang SC", "Segoe UI", sans-serif;
 }
 QMainWindow { background-color: #0e0e10; }
 QGroupBox {
@@ -136,7 +136,7 @@ QTextEdit {
     background-color: #0c0c0e;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
-    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: 'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace;
     font-size: 12px;
     color: #b4f396;
     padding: 10px;
@@ -193,8 +193,13 @@ def main():
     app.setStyle("Fusion")
     app.setStyleSheet(DARK_STYLESHEET)
 
-    font = QFont("Helvetica Neue")
+    _avail = frozenset(QFontDatabase.families())
+    font = QFont()
     font.setPointSize(13)
+    for family in ("Helvetica Neue", "Segoe UI", "PingFang SC", "Arial"):
+        if family in _avail:
+            font.setFamily(family)
+            break
     app.setFont(font)
 
     window = MainWindow()

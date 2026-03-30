@@ -88,6 +88,7 @@ class CustomCodeBackground(Background):
 
     用户代码直接操作 `painter`（离屏 QPainter），和预设背景的 render() 方法完全等价。
     代码里可以用 width, height, t 以及所有注入的 Qt 类和辅助函数。
+    注入的 t / time 已与主窗口「动画速度」滑块一致（同预设背景的 t * speed）。
     """
 
     name = "自定义代码"
@@ -95,6 +96,7 @@ class CustomCodeBackground(Background):
     def __init__(self) -> None:
         from ..i18n import default_custom_code
 
+        self.speed: float = 1.0
         self.code: str = default_custom_code()
         self.error: str | None = None
         self._compiled = None
@@ -129,7 +131,7 @@ class CustomCodeBackground(Background):
         p2.setRenderHint(QPainter.RenderHint.Antialiasing)
         p2.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        ns = _build_ns(p2, width, height, t)
+        ns = _build_ns(p2, width, height, t * self.speed)
 
         try:
             exec(self._compiled, ns)  # noqa: S102

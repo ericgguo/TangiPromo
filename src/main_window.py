@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         self._bg_combo.setCurrentIndex(max(0, ix))
         self._bg_combo.blockSignals(False)
         self._apply_background(first_name)
+        self._on_speed_changed(self._spd_slider.value())
         self._canvas.text_layers.append(
             TextLayer(
                 name=tr("textlayer.name", n=1),
@@ -488,7 +489,7 @@ class MainWindow(QMainWindow):
         self._te_text.setMaximumHeight(70)
         self._te_font = QComboBox()
         self._te_font.addItems([
-            "Helvetica Neue", "SF Pro Display",
+            "Helvetica Neue", "Segoe UI",
             "PingFang SC", "Hiragino Sans GB", "Arial", "Georgia",
         ])
         self._te_size = QSpinBox()
