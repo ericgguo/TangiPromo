@@ -28,13 +28,29 @@ def _ffmpeg_path() -> Optional[str]:
     return shutil.which("ffmpeg")
 
 
+def _bitrate_for_pixels(pixels: int) -> str:
+    if pixels <= 1920 * 1080:
+        return "8M"
+    if pixels <= 2560 * 1440:
+        return "16M"
+    return "30M"
+
+
 def _build_ffmpeg_cmd(
-    path: str, fps: float, width: int, height: int
+    path: str, fps: float, width: int, height: int, *, use_hw: bool = True,
 ) -> list[str]:
-    """Build an ffmpeg command that reads raw RGB24 from stdin."""
+    """Build an ffmpeg command that reads raw RGB24 from stdin.
+
+    use_hw=True  → try h264_videotoolbox on macOS (fast HW encoder).
+    use_hw=False → use libx264 software encoder (slower but universal).
+    """
     ffmpeg = _ffmpeg_path()
     if not ffmpeg:
         return []
+
+    # yuv420p requires even dimensions
+    width = width if width % 2 == 0 else width + 1
+    height = height if height % 2 == 0 else height + 1
 
     inp = [
         ffmpeg, "-hide_banner", "-loglevel", "error",
@@ -47,28 +63,17 @@ def _build_ffmpeg_cmd(
     ]
 
     is_mac = platform.system() == "Darwin"
-    pixels = width * height
 
-    if is_mac:
-        # h264_videotoolbox: Apple hardware encoder.
-        # realtime 0 = quality-first; allow_sw 1 = software fallback if HW busy.
-        # profile high + level auto; bitrate scaled by resolution.
-        if pixels <= 1920 * 1080:
-            br = "8M"
-        elif pixels <= 2560 * 1440:
-            br = "16M"
-        else:
-            br = "30M"
+    if is_mac and use_hw:
+        br = _bitrate_for_pixels(width * height)
         enc = [
             "-c:v", "h264_videotoolbox",
             "-b:v", br,
             "-profile:v", "high",
-            "-level:v", "auto",
             "-realtime", "0",
             "-allow_sw", "1",
         ]
     else:
-        # libx264 software: CRF 18 (visually lossless), medium preset.
         enc = [
             "-c:v", "libx264",
             "-crf", "18",
@@ -83,6 +88,25 @@ def _build_ffmpeg_cmd(
         path,
     ]
     return inp + enc + out
+
+
+def _cleanup_ffmpeg(proc: Optional[subprocess.Popen]) -> None:
+    """Safely terminate an ffmpeg subprocess."""
+    if proc is None:
+        return
+    try:
+        if proc.stdin and not proc.stdin.closed:
+            proc.stdin.close()
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
 
 
 def _create_opencv_writer(path: str, fps: float, size: tuple[int, int]):
@@ -170,23 +194,31 @@ class ExportWorker(QThread):
                 export_cap.release()
                 export_cap = None
 
-        # --- Choose writer: ffmpeg pipe (preferred) or OpenCV fallback ---
-        ffmpeg_cmd = _build_ffmpeg_cmd(self.path, self.fps, ow, oh)
+        # yuv420p requires even dimensions
+        ow = ow if ow % 2 == 0 else ow + 1
+        oh = oh if oh % 2 == 0 else oh + 1
+
+        # --- Choose writer: ffmpeg HW → ffmpeg SW → OpenCV ---
         ffmpeg_proc: Optional[subprocess.Popen] = None
         cv_writer = None
         use_ffmpeg = False
 
-        if ffmpeg_cmd:
+        for try_hw in (True, False):
+            cmd = _build_ffmpeg_cmd(self.path, self.fps, ow, oh, use_hw=try_hw)
+            if not cmd:
+                break
             try:
                 ffmpeg_proc = subprocess.Popen(
-                    ffmpeg_cmd,
+                    cmd,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
                 use_ffmpeg = True
+                break
             except Exception:
                 ffmpeg_proc = None
+                continue
 
         if not use_ffmpeg:
             cv_writer = _create_opencv_writer(self.path, self.fps, (ow, oh))
@@ -256,15 +288,15 @@ class ExportWorker(QThread):
 
                 img = img.convertToFormat(QImage.Format.Format_RGB888)
 
+                iw, ih = img.width(), img.height()
+                ptr = img.bits()
+                try:
+                    ptr.setsize(img.sizeInBytes())  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
                 if use_ffmpeg and ffmpeg_proc and ffmpeg_proc.stdin:
-                    iw, ih = img.width(), img.height()
-                    ptr = img.bits()
-                    try:
-                        ptr.setsize(img.sizeInBytes())  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
                     raw = bytes(ptr)
-                    # Ensure each row is contiguous (no padding beyond 3*w)
                     stride = img.bytesPerLine()
                     if stride != row_bytes:
                         rows = []
@@ -273,17 +305,42 @@ class ExportWorker(QThread):
                         raw = b"".join(rows)
                     try:
                         ffmpeg_proc.stdin.write(raw)
-                    except BrokenPipeError:
-                        stderr_out = ffmpeg_proc.stderr.read() if ffmpeg_proc.stderr else b""
-                        self.error.emit(f"ffmpeg error: {stderr_out.decode(errors='replace')}")
-                        return
+                    except (BrokenPipeError, OSError):
+                        _cleanup_ffmpeg(ffmpeg_proc)
+                        # HW encoder rejected → retry with SW libx264
+                        sw_cmd = _build_ffmpeg_cmd(
+                            self.path, self.fps, ow, oh, use_hw=False,
+                        )
+                        restarted = False
+                        if sw_cmd:
+                            try:
+                                ffmpeg_proc = subprocess.Popen(
+                                    sw_cmd,
+                                    stdin=subprocess.PIPE,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE,
+                                )
+                                ffmpeg_proc.stdin.write(raw)
+                                restarted = True
+                            except Exception:
+                                _cleanup_ffmpeg(ffmpeg_proc)
+                                ffmpeg_proc = None
+                        if not restarted:
+                            use_ffmpeg = False
+                            ffmpeg_proc = None
+                            cv_writer = _create_opencv_writer(
+                                self.path, self.fps, (ow, oh),
+                            )
+                            if cv_writer is None:
+                                self.error.emit(
+                                    tr("export.err.writer", path=self.path)
+                                )
+                                return
+                            arr = np.frombuffer(
+                                raw, dtype=np.uint8
+                            ).reshape((oh, ow, 3))
+                            cv_writer.write(arr[:, :, ::-1].copy())
                 else:
-                    iw, ih = img.width(), img.height()
-                    ptr = img.bits()
-                    try:
-                        ptr.setsize(img.sizeInBytes())  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
                     arr = np.frombuffer(ptr, dtype=np.uint8).reshape((ih, iw, 3))
                     bgr = arr[:, :, ::-1].copy()
                     cv_writer.write(bgr)
@@ -306,13 +363,7 @@ class ExportWorker(QThread):
         finally:
             if export_cap is not None:
                 export_cap.release()
-            if ffmpeg_proc is not None:
-                try:
-                    if ffmpeg_proc.stdin and not ffmpeg_proc.stdin.closed:
-                        ffmpeg_proc.stdin.close()
-                    ffmpeg_proc.kill()
-                except Exception:
-                    pass
+            _cleanup_ffmpeg(ffmpeg_proc)
             if cv_writer is not None:
                 try:
                     cv_writer.release()
@@ -402,7 +453,7 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
     "1080×1080":     (1080, 1080),
     "4K (1:1)":      (3840, 3840),
     "1080p (4:3)":   (1440, 1080),
-    "1350×1080 (4:3)": (1350, 1080),
+    "1350×1080 (4:3)": (1350, 1080),  # odd width; exporter will round to even
     "4K (4:3)":      (3840, 2880),
     "1080p (4:5)":   (864, 1080),
     "4K (4:5)":      (3072, 3840),

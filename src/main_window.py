@@ -1333,19 +1333,20 @@ class MainWindow(QMainWindow):
         if res_key and "4K" in str(res_key):
             long_side = max(int(w), int(h))
             if rw >= rh:
-                # Landscape / square: long side is width
                 w_new = long_side
                 h_new = int(round(w_new * rh / rw))
             else:
-                # Portrait: long side is height
                 h_new = long_side
                 w_new = int(round(h_new * rw / rh))
             w, h = max(1, w_new), max(1, h_new)
         else:
-            # Default behavior: keep height, recompute width
             h_new = int(h)
             w_new = int(round(h_new * rw / rh))
             w, h = max(1, w_new), max(1, h_new)
+
+        # H.264 yuv420p requires even dimensions
+        w = w if w % 2 == 0 else w + 1
+        h = h if h % 2 == 0 else h + 1
 
         if fmt_idx == 0:
             path, _ = QFileDialog.getSaveFileName(
