@@ -1,29 +1,93 @@
 """
 Export the canvas to high-quality PNG/JPG or MP4 video.
 
-渲染管线（与预览几何一致、按目标像素精绘）：
-  • 文字 / 手机框 / 水印 / 背景等均按 width×height 归一化布局，
-    因此在「导出分辨率」下直接 render_frame(w, h, t)，与窗口里看到的构图一致，
-    且为真分辨率输出，不会像「先按预览小图再放大」那样产生马赛克。
+Rendering pipeline (resolution-native, no upscale blur):
+  render_frame(w, h, t) draws at full export resolution.
 
-MP4：逐帧按时间轴 seek 导入视频；优先尝试 H.264(avc1)，失败则回退 mp4v。
+MP4 export prefers **ffmpeg** via stdin pipe for:
+  • macOS hardware H.264 (h264_videotoolbox) — much faster on Apple Silicon / Intel Mac
+  • proper bitrate / CRF / pixel format → plays in QuickTime, iOS, Android, browsers
+  Falls back to OpenCV VideoWriter when ffmpeg is unavailable.
 """
 from __future__ import annotations
 
 import os
+import platform
+import shutil
+import subprocess
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Qt, Signal, QThread
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtGui import QImage, QPainter, QPixmap
 
 from .canvas import _decode_frame_at_time
 from .i18n import tr
 
 
-def _create_video_writer(path: str, fps: float, size: tuple[int, int]):
-    """优先使用 avc1(H.264)，码流通常比 mp4v 更细、块效应更轻。"""
-    import cv2
+def _ffmpeg_path() -> Optional[str]:
+    return shutil.which("ffmpeg")
 
+
+def _build_ffmpeg_cmd(
+    path: str, fps: float, width: int, height: int
+) -> list[str]:
+    """Build an ffmpeg command that reads raw RGB24 from stdin."""
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        return []
+
+    inp = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-y",
+        "-f", "rawvideo",
+        "-pix_fmt", "rgb24",
+        "-s", f"{width}x{height}",
+        "-r", str(fps),
+        "-i", "pipe:0",
+    ]
+
+    is_mac = platform.system() == "Darwin"
+    pixels = width * height
+
+    if is_mac:
+        # h264_videotoolbox: Apple hardware encoder.
+        # realtime 0 = quality-first; allow_sw 1 = software fallback if HW busy.
+        # profile high + level auto; bitrate scaled by resolution.
+        if pixels <= 1920 * 1080:
+            br = "8M"
+        elif pixels <= 2560 * 1440:
+            br = "16M"
+        else:
+            br = "30M"
+        enc = [
+            "-c:v", "h264_videotoolbox",
+            "-b:v", br,
+            "-profile:v", "high",
+            "-level:v", "auto",
+            "-realtime", "0",
+            "-allow_sw", "1",
+        ]
+    else:
+        # libx264 software: CRF 18 (visually lossless), medium preset.
+        enc = [
+            "-c:v", "libx264",
+            "-crf", "18",
+            "-preset", "medium",
+            "-profile:v", "high",
+            "-level:v", "4.2",
+        ]
+
+    out = [
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        path,
+    ]
+    return inp + enc + out
+
+
+def _create_opencv_writer(path: str, fps: float, size: tuple[int, int]):
+    """Fallback: OpenCV VideoWriter with avc1 → H264 → mp4v."""
+    import cv2
     w, h = size
     for tag in ("avc1", "H264", "mp4v"):
         fourcc = cv2.VideoWriter_fourcc(*tag)
@@ -34,7 +98,6 @@ def _create_video_writer(path: str, fps: float, size: tuple[int, int]):
 
 
 def _paint_export_frame(canvas, img: QImage, width: int, height: int, t: float) -> None:
-    """在目标尺寸上绘制单帧，使用与预览相同的高质量选项。"""
     img.fill(Qt.GlobalColor.black)
     p = QPainter(img)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -99,7 +162,6 @@ class ExportWorker(QThread):
             self.error.emit(tr("export.err.invalid_wh"))
             return
 
-        # 独立 VideoCapture，避免与主线程预览共用同一解码器（防止 libav 断言崩溃）
         export_cap = None
         vpath = self.canvas.video_source_path()
         if vpath:
@@ -108,13 +170,32 @@ class ExportWorker(QThread):
                 export_cap.release()
                 export_cap = None
 
-        self.canvas.set_export_active(True)
-        try:
-            vw = _create_video_writer(self.path, self.fps, (ow, oh))
-            if vw is None:
+        # --- Choose writer: ffmpeg pipe (preferred) or OpenCV fallback ---
+        ffmpeg_cmd = _build_ffmpeg_cmd(self.path, self.fps, ow, oh)
+        ffmpeg_proc: Optional[subprocess.Popen] = None
+        cv_writer = None
+        use_ffmpeg = False
+
+        if ffmpeg_cmd:
+            try:
+                ffmpeg_proc = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                use_ffmpeg = True
+            except Exception:
+                ffmpeg_proc = None
+
+        if not use_ffmpeg:
+            cv_writer = _create_opencv_writer(self.path, self.fps, (ow, oh))
+            if cv_writer is None:
                 self.error.emit(tr("export.err.writer", path=self.path))
                 return
 
+        self.canvas.set_export_active(True)
+        try:
             src_fps = float(self.canvas.video_fps())
             src_dur = self.canvas.imported_video_duration_sec()
 
@@ -123,31 +204,28 @@ class ExportWorker(QThread):
                     return min(max(0.0, tt), src_dur - 0.5 / src_fps)
                 return max(0.0, tt)
 
-            # When exporting a video, decoding by seeking for every frame
-            # (CAP_PROP_POS_FRAMES + read) may land on the same/nearby frame,
-            # especially on 4K sources/codecs. We sacrifice some speed and
-            # decode sequentially after a single initial seek.
             current_idx: int | None = None
-            current_pm = None
+            current_pm: QPixmap | None = None
             eof = False
 
             if export_cap is not None and src_fps > 1e-6:
-                # Initialize to the first output frame's nearest input frame.
                 t0 = _clamp_src_time(0.0)
                 idx0 = int(t0 * src_fps + 0.5)
                 export_cap.set(cv2.CAP_PROP_POS_FRAMES, idx0)
                 ret, frame = export_cap.read()
                 if ret:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
-                    h, w, c = frame_rgb.shape
+                    fh, fw, fc = frame_rgb.shape
                     img0 = QImage(
-                        frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
+                        frame_rgb.data, fw, fh, fw * fc, QImage.Format.Format_RGB888
                     ).copy()
                     current_pm = QPixmap.fromImage(img0)
                     current_idx = idx0
                 else:
                     eof = True
                     current_idx = idx0
+
+            row_bytes = ow * 3
 
             for i in range(total):
                 t = i / self.fps
@@ -156,46 +234,90 @@ class ExportWorker(QThread):
                     tt = _clamp_src_time(t)
                     target_idx = int(tt * src_fps + 0.5)
 
-                    # Decode forward until we reach the nearest frame.
                     while current_idx is not None and current_idx < target_idx:
                         ret, frame = export_cap.read()
                         if not ret:
                             eof = True
                             break
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
-                        h, w, c = frame_rgb.shape
-                        img = QImage(
-                            frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
+                        fh, fw, fc = frame_rgb.shape
+                        qimg = QImage(
+                            frame_rgb.data, fw, fh, fw * fc, QImage.Format.Format_RGB888
                         ).copy()
-                        current_pm = QPixmap.fromImage(img)
+                        current_pm = QPixmap.fromImage(qimg)
                         current_idx += 1
 
                     self.canvas.video_frame = current_pm
                 elif export_cap is not None:
-                    # Fallback (e.g. init failed): keep last frame (or None).
                     self.canvas.video_frame = current_pm
 
                 img = QImage(ow, oh, QImage.Format.Format_RGB32)
                 _paint_export_frame(self.canvas, img, ow, oh, t)
 
                 img = img.convertToFormat(QImage.Format.Format_RGB888)
-                iw, ih = img.width(), img.height()
-                ptr = img.bits()
-                try:
-                    ptr.setsize(img.sizeInBytes())  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-                arr = np.frombuffer(ptr, dtype=np.uint8).reshape((ih, iw, 3))
-                bgr = arr[:, :, ::-1].copy()
-                vw.write(bgr)
+
+                if use_ffmpeg and ffmpeg_proc and ffmpeg_proc.stdin:
+                    iw, ih = img.width(), img.height()
+                    ptr = img.bits()
+                    try:
+                        ptr.setsize(img.sizeInBytes())  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    raw = bytes(ptr)
+                    # Ensure each row is contiguous (no padding beyond 3*w)
+                    stride = img.bytesPerLine()
+                    if stride != row_bytes:
+                        rows = []
+                        for y in range(ih):
+                            rows.append(raw[y * stride : y * stride + row_bytes])
+                        raw = b"".join(rows)
+                    try:
+                        ffmpeg_proc.stdin.write(raw)
+                    except BrokenPipeError:
+                        stderr_out = ffmpeg_proc.stderr.read() if ffmpeg_proc.stderr else b""
+                        self.error.emit(f"ffmpeg error: {stderr_out.decode(errors='replace')}")
+                        return
+                else:
+                    iw, ih = img.width(), img.height()
+                    ptr = img.bits()
+                    try:
+                        ptr.setsize(img.sizeInBytes())  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    arr = np.frombuffer(ptr, dtype=np.uint8).reshape((ih, iw, 3))
+                    bgr = arr[:, :, ::-1].copy()
+                    cv_writer.write(bgr)
 
                 self.progress.emit(int((i + 1) / total * 100))
 
-            vw.release()
+            # Finalize
+            if use_ffmpeg and ffmpeg_proc:
+                if ffmpeg_proc.stdin:
+                    ffmpeg_proc.stdin.close()
+                ffmpeg_proc.wait()
+                if ffmpeg_proc.returncode != 0:
+                    stderr_out = ffmpeg_proc.stderr.read() if ffmpeg_proc.stderr else b""
+                    self.error.emit(f"ffmpeg exit {ffmpeg_proc.returncode}: {stderr_out.decode(errors='replace')}")
+                    return
+            elif cv_writer is not None:
+                cv_writer.release()
+
             self.finished.emit(self.path)
         finally:
             if export_cap is not None:
                 export_cap.release()
+            if ffmpeg_proc is not None:
+                try:
+                    if ffmpeg_proc.stdin and not ffmpeg_proc.stdin.closed:
+                        ffmpeg_proc.stdin.close()
+                    ffmpeg_proc.kill()
+                except Exception:
+                    pass
+            if cv_writer is not None:
+                try:
+                    cv_writer.release()
+                except Exception:
+                    pass
             self.canvas.set_export_active(False)
 
 
@@ -210,7 +332,6 @@ class Exporter:
         height: int,
         quality: int = 95,
     ) -> str:
-        """在目标分辨率下直接渲染（与预览同一套归一化布局，无放大插值模糊）。"""
         w, h = max(width, 1), max(height, 1)
         img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
         img.fill(Qt.GlobalColor.transparent)
@@ -252,7 +373,6 @@ class Exporter:
         on_finished: Callable[[str], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> ExportWorker:
-        """Start async video export.  Returns the worker thread."""
         worker = ExportWorker(
             canvas,
             path,
