@@ -42,6 +42,8 @@ Paste the following into your AI prompt so generated code actually runs inside T
 ### Requirements
 
 - **Python 3.10+** (use a version that has compatible wheels for PySide6 on your OS).
+- **ffmpeg (recommended, optional)** — Used for faster and more compatible `MP4` exports (especially 4K) by piping frames into ffmpeg (macOS uses hardware H.264 when available). If `ffmpeg` is not installed, the app falls back to OpenCV video writing.
+  - macOS: `brew install ffmpeg`
 
 ### Install and run
 
@@ -102,6 +104,8 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
 ### 环境要求
 
 - **Python 3.10+**（需与当前系统上 PySide6 的预编译包版本兼容）。
+- **ffmpeg（建议安装，可选）** — 用于通过管道把帧交给 `ffmpeg` 来导出 `MP4`（速度更快、兼容性更好，尤其是 4K）。未安装时会自动回退到 OpenCV 的编码方式。
+  - macOS：`brew install ffmpeg`
 
 ### 安装与运行
 
