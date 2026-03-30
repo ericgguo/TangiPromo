@@ -192,8 +192,8 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._sec_lang)
         self._lang_combo = QComboBox()
         self._lang_combo.blockSignals(True)
-        self._lang_combo.addItem("中文", "zh")
         self._lang_combo.addItem("English", "en")
+        self._lang_combo.addItem("中文", "zh")
         self._lang_combo.setCurrentIndex(0)
         self._lang_combo.blockSignals(False)
         self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
@@ -611,7 +611,7 @@ class MainWindow(QMainWindow):
         if idx < 0:
             return
         loc = self._lang_combo.itemData(idx)
-        set_locale(loc if loc in ("zh", "en") else "zh")
+        set_locale(loc if loc in ("zh", "en") else "en")
         self.apply_ui_language()
 
     def apply_ui_language(self) -> None:

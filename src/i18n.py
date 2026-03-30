@@ -8,7 +8,7 @@ from .i18n_samples import CODE_SAMPLE_EN, CODE_SAMPLE_ZH
 
 Locale = Literal["zh", "en"]
 
-_current: Locale = "zh"
+_current: Locale = "en"
 
 ZH: dict[str, str] = {
     "app.title": "TangiPromo — App 宣发素材生成器",
@@ -366,7 +366,7 @@ EN: dict[str, str] = {
 
 def set_locale(loc: Locale) -> None:
     global _current
-    _current = loc if loc in ("zh", "en") else "zh"
+    _current = loc if loc in ("zh", "en") else "en"
 
 
 def get_locale() -> Locale:

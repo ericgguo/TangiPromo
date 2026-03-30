@@ -1,20 +1,20 @@
 # TangiPromo
 
-桌面端 App 宣发素材工具：在画布上组合动态背景、iPhone 机型 mockup、屏幕截图、文字与水印，并按多种比例导出图片或视频。
+Desktop app for creating App Store–style promo assets: combine animated backgrounds, iPhone device frames, screen content, text, and watermarks on a canvas, then export still images or video in multiple aspect ratios.
 
-## 功能概览
+## Features
 
-- 多种输出比例（如 16:9、9:16、1:1 等）
-- 内置动态背景预设，支持自定义 Python 绘制代码与预设保存
-- iPhone 外观与屏幕内容叠加
-- 文字图层、水印 PNG
-- 导出为静态图或视频；界面支持中文 / English
+- Common output ratios (16:9, 9:16, 1:1, etc.)
+- Built-in animated backgrounds plus custom Python drawing code and savable presets
+- iPhone shell with screen image or video
+- Text layers and PNG watermarks
+- Export to PNG, JPEG, or MP4; UI in English or Chinese
 
-## 环境要求
+## Requirements
 
-- Python 3.10+（建议与当前系统已安装的 PySide6 兼容版本一致）
+- Python 3.10+ (use a version compatible with your PySide6 wheel)
 
-## 安装与运行
+## Install and run
 
 ```bash
 cd TangiPromo
@@ -24,4 +24,4 @@ pip install -r requirements.txt
 python main.py
 ```
 
-依赖见项目根目录 `requirements.txt`（PySide6、NumPy、Pillow、OpenCV 等）。
+Dependencies are listed in `requirements.txt` (PySide6, NumPy, Pillow, OpenCV, etc.).
