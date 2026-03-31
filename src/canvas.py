@@ -8,6 +8,7 @@ Animated preview canvas.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
@@ -70,11 +71,14 @@ class Canvas(QWidget):
     iphone_moved = Signal(float, float)
     # 水印索引（用于同步右侧输入框）
     watermark_moved = Signal(int)
+    # 当前时间（秒）变化，用于时间轴 UI 跟随
+    time_changed = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(400, 280)
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setMouseTracking(True)
 
         # ── Rendering state ──────────────────────────────────────────────
         self.background = None          # Background instance
@@ -102,6 +106,15 @@ class Canvas(QWidget):
 
         self.watermark_states: list[WatermarkState] = default_watermark_states()
         self._wm_pix_cache: dict[tuple[str, int], QPixmap] = {}
+        self.effect_enabled: bool = False
+        self.effect_code: str = ""
+        self.effect_duration: float = 10.0
+        self.effect_breakpoints: list[float] = []
+        self.effect_error: Optional[str] = None
+        self._effect_code_cache_src: str = ""
+        self._effect_code_cache_obj = None
+        self.region_guide_enabled: bool = False
+        self._region_hover_norm: tuple[float, float] | None = None
 
         # ── Animation ────────────────────────────────────────────────────
         self.time: float = 0.0
@@ -125,7 +138,15 @@ class Canvas(QWidget):
         self._paused = paused
 
     def reset_time(self) -> None:
-        self.time = 0.0
+        self.set_time(0.0)
+
+    def set_time(self, t: float) -> None:
+        """设置当前预览时间（秒），并同步视频帧与画面刷新。"""
+        self.time = max(0.0, float(t))
+        if self.video_cap and not self._export_active:
+            self._seek_video_to_time(self.time)
+        self.time_changed.emit(self.time)
+        self.update()
 
     def set_video(self, path: str) -> None:
         try:
@@ -142,7 +163,8 @@ class Canvas(QWidget):
                 self._video_duration_sec = fc / self._video_fps
             else:
                 self._video_duration_sec = None
-            self._advance_video()
+            # Keep imported video frame fully time-driven.
+            self.set_time(0.0)
         except ImportError:
             pass
 
@@ -200,6 +222,30 @@ class Canvas(QWidget):
         t: float,
     ) -> None:
         """Draw one complete frame.  Called both from paintEvent and exporter."""
+        if self.effect_enabled and self.effect_code.strip():
+            dev = painter.device()
+            is_preview_paint = isinstance(dev, QWidget)
+            dpr = self.devicePixelRatioF() if is_preview_paint else 1.0
+            pw = max(1, int(round(width * dpr)))
+            ph = max(1, int(round(height * dpr)))
+            img = QImage(pw, ph, QImage.Format.Format_ARGB32_Premultiplied)
+            img.fill(Qt.GlobalColor.black)
+            p2 = QPainter(img)
+            p2.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p2.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            if dpr > 1.0:
+                # Keep scene layout in logical coordinates while rasterizing at hi-DPI.
+                p2.scale(dpr, dpr)
+            self._render_scene(p2, width, height, t)
+            p2.end()
+            out = self._apply_effect_code(img, pw, ph, t)
+            painter.drawImage(QRectF(0, 0, width, height), out, QRectF(0, 0, pw, ph))
+            return
+        self._render_scene(painter, width, height, t)
+
+    def _render_scene(
+        self, painter: QPainter, width: int, height: int, t: float
+    ) -> None:
         # Background
         if self.background:
             self.background.render(painter, width, height, t)
@@ -224,6 +270,75 @@ class Canvas(QWidget):
         render_watermarks(
             painter, width, height, self.watermark_states, self._wm_pix_cache
         )
+
+    def _apply_effect_code(
+        self, img: QImage, width: int, height: int, t: float
+    ) -> QImage:
+        out = img
+        self.effect_error = None
+        src = self.effect_code
+        if src != self._effect_code_cache_src:
+            self._effect_code_cache_src = src
+            self._effect_code_cache_obj = None
+            try:
+                self._effect_code_cache_obj = compile(src, "<effects>", "exec")
+            except Exception as e:
+                self.effect_error = str(e)
+                return out
+
+        def zoom_region(
+            x: float, y: float, w: float, h: float, scale: float
+        ) -> None:
+            nonlocal out
+            if scale <= 0.01:
+                return
+            x = max(0.0, min(1.0, x))
+            y = max(0.0, min(1.0, y))
+            w = max(0.001, min(1.0, w))
+            h = max(0.001, min(1.0, h))
+            pw = width * w
+            ph = height * h
+            cx = width * x
+            cy = height * y
+            tx = cx - pw * 0.5
+            ty = cy - ph * 0.5
+            target = QRectF(tx, ty, pw, ph)
+            src_w = pw / scale
+            src_h = ph / scale
+            sx = cx - src_w * 0.5
+            sy = cy - src_h * 0.5
+            sx = max(0.0, min(width - src_w, sx))
+            sy = max(0.0, min(height - src_h, sy))
+            source = QRectF(sx, sy, src_w, src_h)
+            src_img = out.copy()
+            pz = QPainter(out)
+            pz.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            pz.drawImage(target, src_img, source)
+            pz.end()
+
+        ns: dict[str, object] = {
+            "__builtins__": __builtins__,
+            "img": out,
+            "width": width,
+            "height": height,
+            "t": t,
+            "time": t,
+            "duration": max(0.01, float(self.effect_duration)),
+            "breakpoints": list(self.effect_breakpoints),
+            "math": math,
+            "QPainter": QPainter,
+            "QImage": QImage,
+            "QRectF": QRectF,
+            "QColor": QColor,
+            "Qt": Qt,
+            "zoom_region": zoom_region,
+        }
+        try:
+            if self._effect_code_cache_obj is not None:
+                exec(self._effect_code_cache_obj, ns, ns)
+        except Exception as e:
+            self.effect_error = str(e)
+        return out
 
     def clear_watermark_pixmap_cache(self) -> None:
         self._wm_pix_cache.clear()
@@ -266,6 +381,24 @@ class Canvas(QWidget):
         p.setPen(QColor(255, 255, 255, 18))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(ox, oy, cw, ch, 6, 6)
+
+        if self.region_guide_enabled and self._region_hover_norm is not None:
+            nx, ny = self._region_hover_norm
+            px = ox + int(round(nx * cw))
+            py = oy + int(round(ny * ch))
+            p.setPen(QColor(10, 132, 255, 170))
+            p.drawLine(px, oy, px, oy + ch)
+            p.drawLine(ox, py, ox + cw, py)
+            p.setBrush(QColor(10, 132, 255, 210))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QPoint(px, py), 4, 4)
+            p.setPen(QColor(255, 255, 255, 235))
+            p.setBrush(QColor(0, 0, 0, 170))
+            label = f"x={nx:.3f}, y={ny:.3f}"
+            tx = min(max(ox + 8, px + 10), ox + cw - 130)
+            ty = min(max(oy + 8, py + 10), oy + ch - 22)
+            p.drawRoundedRect(tx, ty, 122, 20, 4, 4)
+            p.drawText(tx + 8, ty + 14, label)
 
         # Selection highlight
         if self.selected_layer >= 0:
@@ -338,6 +471,11 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         nx, ny = self._to_norm(event.position())
+        if self.region_guide_enabled:
+            if nx is None or ny is None:
+                self._region_hover_norm = None
+            else:
+                self._region_hover_norm = (nx, ny)
 
         if self._drag_watermark_idx is not None:
             if nx is None:
@@ -391,21 +529,34 @@ class Canvas(QWidget):
         self._drag_start_wm_center = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
+    def leaveEvent(self, _event) -> None:
+        if self.region_guide_enabled and self._region_hover_norm is not None:
+            self._region_hover_norm = None
+            self.update()
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
     def _tick(self) -> None:
         if not self._paused:
-            self.time += 1.0 / 60.0
-        if self.video_cap and not self._export_active:
-            self._advance_video()
+            if self.video_cap and not self._export_active:
+                if self._advance_video():
+                    self.time += 1.0 / max(self._video_fps, 1e-6)
+                    if (
+                        self._video_duration_sec is not None
+                        and self._video_duration_sec > 0
+                        and self.time >= self._video_duration_sec
+                    ):
+                        self.time = self.time % self._video_duration_sec
+            else:
+                self.time += 1.0 / 60.0
+            self.time_changed.emit(self.time)
         self.update()
 
-    def _advance_video(self) -> None:
+    def _advance_video(self) -> bool:
         try:
             import cv2
-            import numpy as np
             ret, frame = self.video_cap.read()
             if not ret:
                 self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -417,8 +568,20 @@ class Canvas(QWidget):
                     frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
                 )
                 self.video_frame = QPixmap.fromImage(img)
+                return True
         except Exception:
-            pass
+            return False
+        return False
+
+    def _seek_video_to_time(self, t: float) -> None:
+        """按时间 seek 到导入视频对应帧，用于时间轴拖动预览。"""
+        if not self.video_cap:
+            return
+        pm = _decode_frame_at_time(
+            self.video_cap, t, self._video_fps, self._video_duration_sec
+        )
+        if pm is not None:
+            self.video_frame = pm
 
     def _canvas_size(self) -> tuple[int, int]:
         rw, rh = self.output_ratio

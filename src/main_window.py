@@ -124,6 +124,8 @@ class MainWindow(QMainWindow):
         self._canvas = Canvas()
         self._export_worker: Optional[ExportWorker] = None
         self._current_bg_name: Optional[str] = None
+        self._timeline_dragging = False
+        self._timeline_breakpoints: list[float] = []
 
         self._bg_instances: dict[str, object] = {
             cls().name: cls() for cls in ALL_BACKGROUNDS
@@ -147,6 +149,10 @@ class MainWindow(QMainWindow):
         self._bg_combo.blockSignals(False)
         self._apply_background(first_name)
         self._on_speed_changed(self._spd_slider.value())
+        self._refresh_pause_btn()
+        self._on_timeline_duration_changed(self._dur_spin.value())
+        self._refresh_breakpoint_combo()
+        self._update_timeline_visibility()
         self._canvas.text_layers.append(
             TextLayer(
                 name=tr("textlayer.name", n=1),
@@ -164,7 +170,7 @@ class MainWindow(QMainWindow):
         splitter.setHandleWidth(2)
 
         splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self._canvas)
+        splitter.addWidget(self._build_center_panel())
         splitter.addWidget(self._build_right_panel())
 
         splitter.setStretchFactor(0, 0)
@@ -183,6 +189,42 @@ class MainWindow(QMainWindow):
         self._status_lbl = QLabel(tr("status.ready"))
         sb.addWidget(self._status_lbl)
         self.setStatusBar(sb)
+
+    def _build_center_panel(self) -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(self._canvas, 1)
+
+        self._timeline_bar = QWidget()
+        bar_lay = QVBoxLayout(self._timeline_bar)
+        bar_lay.setContentsMargins(8, 4, 8, 8)
+        bar_lay.setSpacing(4)
+        self._timeline_slider = _slider(0, 10_000, 0)
+        self._timeline_slider.setToolTip(tr("timeline.tip"))
+        self._timeline_time_lbl = QLabel("00:00.00 / 00:10.00")
+        self._timeline_time_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        ctrls = QWidget()
+        ctrls_lay = QHBoxLayout(ctrls)
+        ctrls_lay.setContentsMargins(0, 0, 0, 0)
+        self._tl_play_btn = QPushButton(tr("timeline.play_pause"))
+        self._tl_add_bp_btn = QPushButton(tr("timeline.add_bp"))
+        self._tl_del_bp_btn = QPushButton(tr("timeline.del_bp"))
+        self._tl_bp_combo = QComboBox()
+        self._tl_bp_combo.setMinimumWidth(200)
+        self._tl_bp_combo.addItem(tr("timeline.bp_none"), None)
+        ctrls_lay.addWidget(self._tl_play_btn)
+        ctrls_lay.addWidget(self._tl_add_bp_btn)
+        ctrls_lay.addWidget(self._tl_del_bp_btn)
+        ctrls_lay.addWidget(self._tl_bp_combo, 1)
+        bar_lay.addWidget(self._timeline_slider)
+        bar_lay.addWidget(self._timeline_time_lbl)
+        bar_lay.addWidget(ctrls)
+        lay.addWidget(self._timeline_bar, 0)
+        return host
 
     # ── Left panel ──────────────────────────────────────────────────────
 
@@ -419,6 +461,24 @@ class MainWindow(QMainWindow):
         vl_txt.addWidget(self._txt_stack)
         lay.addWidget(self._gb_txt)
 
+        self._gb_fx, vl_fx = _group(tr("group.effects"))
+        self._fx_enable_cb = QCheckBox(tr("effects.enable"))
+        self._fx_region_guide_cb = QCheckBox(tr("effects.region_guide"))
+        self._fx_help_lbl = QLabel(tr("effects.help"))
+        self._fx_help_lbl.setWordWrap(True)
+        self._fx_help_lbl.setStyleSheet("color:#8e8e93;font-size:11px;")
+        self._fx_code_edit = QTextEdit()
+        self._fx_code_edit.setMinimumHeight(120)
+        self._fx_code_edit.setPlaceholderText(tr("effects.code_ph"))
+        self._fx_apply_btn = QPushButton(tr("effects.apply"))
+        self._fx_apply_btn.setObjectName("primaryBtn")
+        vl_fx.addWidget(self._fx_enable_cb)
+        vl_fx.addWidget(self._fx_region_guide_cb)
+        vl_fx.addWidget(self._fx_help_lbl)
+        vl_fx.addWidget(self._fx_code_edit)
+        vl_fx.addWidget(self._fx_apply_btn)
+        lay.addWidget(self._gb_fx)
+
         self._gb_exp, vl_exp = _group(tr("group.export"))
 
         self._exp_format = QComboBox()
@@ -446,7 +506,7 @@ class MainWindow(QMainWindow):
         self._fps_spin.setValue(30)
         self._fps_spin.setSuffix(" fps")
         self._dur_spin = QDoubleSpinBox()
-        self._dur_spin.setRange(1, 120)
+        self._dur_spin.setRange(1, 3600)
         self._dur_spin.setValue(10)
         self._dur_spin.setSuffix(tr("export.suffix.sec"))
         self._lbl_vid_fps = QLabel(tr("export.fps"))
@@ -596,10 +656,27 @@ class MainWindow(QMainWindow):
         self._code_apply_timer.setInterval(400)
         self._code_apply_timer.timeout.connect(self._apply_custom_code)
         self._code_edit.textChanged.connect(self._on_custom_code_text_changed)
+        self._dur_spin.valueChanged.connect(self._on_timeline_duration_changed)
+        self._timeline_slider.sliderPressed.connect(self._on_timeline_slider_pressed)
+        self._timeline_slider.sliderReleased.connect(self._on_timeline_slider_released)
+        self._timeline_slider.valueChanged.connect(self._on_timeline_slider_changed)
+        self._canvas.time_changed.connect(self._sync_timeline_from_canvas)
+        self._tl_play_btn.clicked.connect(self._toggle_pause)
+        self._tl_add_bp_btn.clicked.connect(self._add_timeline_breakpoint)
+        self._tl_del_bp_btn.clicked.connect(self._remove_selected_breakpoint)
+        self._tl_bp_combo.currentIndexChanged.connect(self._jump_to_selected_breakpoint)
+        self._fx_apply_btn.clicked.connect(self._apply_effects_code)
+        self._fx_enable_cb.toggled.connect(self._on_effect_toggle)
+        self._fx_region_guide_cb.toggled.connect(self._on_region_guide_toggle)
+        self._fx_code_edit.textChanged.connect(self._on_effect_code_changed)
 
         self._preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
         self._preset_save_btn.clicked.connect(self._save_custom_preset)
         self._preset_del_btn.clicked.connect(self._delete_custom_preset)
+
+        self._timeline_ui_timer = QTimer(self)
+        self._timeline_ui_timer.timeout.connect(self._sync_timeline_from_canvas)
+        self._timeline_ui_timer.start(60)
 
     def _on_bg_combo_changed(self, idx: int) -> None:
         if idx < 0:
@@ -693,10 +770,27 @@ class MainWindow(QMainWindow):
         self._lbl_vid_fps.setText(tr("export.fps"))
         self._lbl_vid_dur.setText(tr("export.dur"))
         self._dur_spin.setSuffix(tr("export.suffix.sec"))
+        self._timeline_slider.setToolTip(tr("timeline.tip"))
+        self._tl_play_btn.setText(tr("timeline.play_pause"))
+        self._tl_add_bp_btn.setText(tr("timeline.add_bp"))
+        self._tl_del_bp_btn.setText(tr("timeline.del_bp"))
+        if self._tl_bp_combo.count() == 0:
+            self._tl_bp_combo.addItem(tr("timeline.bp_none"), None)
+        elif self._tl_bp_combo.itemData(0) is None:
+            self._tl_bp_combo.setItemText(0, tr("timeline.bp_none"))
         self._full_import_cb.setText(tr("export.full_vid"))
         self._full_import_cb.setToolTip(tr("export.full_vid_tip"))
         self._export_btn.setText(tr("export.btn"))
+        self._gb_fx.setTitle(tr("group.effects"))
+        self._fx_enable_cb.setText(tr("effects.enable"))
+        self._fx_region_guide_cb.setText(tr("effects.region_guide"))
+        self._fx_help_lbl.setText(tr("effects.help"))
+        self._fx_code_edit.setPlaceholderText(tr("effects.code_ph"))
+        self._fx_apply_btn.setText(tr("effects.apply"))
         self._update_vid_src_hint()
+        self._sync_timeline_from_canvas()
+        self._refresh_breakpoint_combo()
+        self._update_timeline_visibility()
         self._refresh_phone_combo_language()
         self._maybe_refresh_builtin_code_sample()
         self._sync_builtin_text_layers_locale()
@@ -781,6 +875,7 @@ class MainWindow(QMainWindow):
     def _refresh_pause_btn(self) -> None:
         p = self._canvas._paused
         self._pause_btn.setText(tr("btn.resume") if p else tr("btn.pause"))
+        self._tl_play_btn.setText(tr("btn.resume") if p else tr("btn.pause"))
 
     def _on_model_index_changed(self, idx: int) -> None:
         if idx < 0:
@@ -991,6 +1086,7 @@ class MainWindow(QMainWindow):
         self._code_group.setVisible(is_custom)
         if is_custom:
             self._sync_custom_code_panel_from_preset()
+        self._update_timeline_visibility()
 
     def _sync_custom_code_panel_from_preset(self) -> None:
         """打开「自定义代码」背景时：按当前预设下拉框加载编辑器与实例。"""
@@ -1133,6 +1229,125 @@ class MainWindow(QMainWindow):
         self._canvas.pause(p)
         self._refresh_pause_btn()
 
+    def _fmt_timeline_time(self, sec: float) -> str:
+        sec = max(0.0, float(sec))
+        m = int(sec // 60)
+        s = sec - m * 60
+        return f"{m:02d}:{s:05.2f}"
+
+    def _timeline_duration(self) -> float:
+        return max(0.1, float(self._dur_spin.value()))
+
+    def _on_timeline_duration_changed(self, _val: float) -> None:
+        # Keep timeline range tied to export duration.
+        self._canvas.effect_duration = self._timeline_duration()
+        self._sync_timeline_from_canvas()
+
+    def _on_timeline_slider_pressed(self) -> None:
+        self._timeline_dragging = True
+
+    def _on_timeline_slider_released(self) -> None:
+        self._timeline_dragging = False
+        self._on_timeline_slider_changed(self._timeline_slider.value())
+
+    def _on_timeline_slider_changed(self, value: int) -> None:
+        if not self._timeline_dragging:
+            return
+        dur = self._timeline_duration()
+        t = dur * (value / 10_000.0)
+        self._canvas.set_time(t)
+        self._timeline_time_lbl.setText(
+            f"{self._fmt_timeline_time(t)} / {self._fmt_timeline_time(dur)}"
+        )
+
+    def _sync_timeline_from_canvas(self, *_args) -> None:
+        if self._timeline_dragging:
+            return
+        dur = self._timeline_duration()
+        t = self._canvas.time
+        # Timeline visual loops in [0, duration], while canvas time can keep increasing.
+        show_t = t % dur if dur > 1e-6 else 0.0
+        pos = int(round(max(0.0, min(1.0, show_t / dur)) * 10_000.0))
+        self._timeline_slider.blockSignals(True)
+        self._timeline_slider.setValue(pos)
+        self._timeline_slider.blockSignals(False)
+        self._timeline_time_lbl.setText(
+            f"{self._fmt_timeline_time(show_t)} / {self._fmt_timeline_time(dur)}"
+        )
+
+    def _background_is_animated(self) -> bool:
+        bg = self._canvas.background
+        return bool(bg is not None and hasattr(bg, "speed"))
+
+    def _update_timeline_visibility(self) -> None:
+        has_video = self._canvas.video_source_path() is not None
+        self._timeline_bar.setVisible(has_video or self._background_is_animated())
+
+    def _add_timeline_breakpoint(self) -> None:
+        dur = self._timeline_duration()
+        t = self._canvas.time % dur if dur > 1e-6 else 0.0
+        if any(abs(bp - t) < 1e-3 for bp in self._timeline_breakpoints):
+            return
+        self._timeline_breakpoints.append(t)
+        self._timeline_breakpoints.sort()
+        self._refresh_breakpoint_combo(select_t=t)
+
+    def _remove_selected_breakpoint(self) -> None:
+        idx = self._tl_bp_combo.currentIndex()
+        if idx <= 0:
+            return
+        t = self._tl_bp_combo.itemData(idx)
+        if t is None:
+            return
+        self._timeline_breakpoints = [
+            bp for bp in self._timeline_breakpoints if abs(bp - float(t)) >= 1e-3
+        ]
+        self._refresh_breakpoint_combo()
+
+    def _refresh_breakpoint_combo(self, select_t: Optional[float] = None) -> None:
+        self._canvas.effect_breakpoints = list(self._timeline_breakpoints)
+        self._tl_bp_combo.blockSignals(True)
+        self._tl_bp_combo.clear()
+        self._tl_bp_combo.addItem(tr("timeline.bp_none"), None)
+        sel = 0
+        for i, bp in enumerate(self._timeline_breakpoints, start=1):
+            label = tr("timeline.bp_item", t=self._fmt_timeline_time(bp))
+            self._tl_bp_combo.addItem(label, bp)
+            if select_t is not None and abs(bp - select_t) < 1e-3:
+                sel = i
+        self._tl_bp_combo.setCurrentIndex(sel)
+        self._tl_bp_combo.blockSignals(False)
+
+    def _jump_to_selected_breakpoint(self, idx: int) -> None:
+        if idx <= 0:
+            return
+        t = self._tl_bp_combo.itemData(idx)
+        if t is None:
+            return
+        self._canvas.set_time(float(t))
+
+    def _on_effect_toggle(self, enabled: bool) -> None:
+        self._canvas.effect_enabled = bool(enabled)
+        self._canvas.update()
+
+    def _on_region_guide_toggle(self, enabled: bool) -> None:
+        self._canvas.region_guide_enabled = bool(enabled)
+        self._canvas.update()
+
+    def _on_effect_code_changed(self) -> None:
+        self._canvas.effect_code = self._fx_code_edit.toPlainText()
+        self._canvas.update()
+
+    def _apply_effects_code(self) -> None:
+        self._canvas.effect_enabled = self._fx_enable_cb.isChecked()
+        self._canvas.effect_code = self._fx_code_edit.toPlainText()
+        self._canvas.effect_duration = self._timeline_duration()
+        self._canvas.update()
+        if self._canvas.effect_error:
+            QMessageBox.warning(
+                self, tr("err.title"), tr("effects.err", err=self._canvas.effect_error)
+            )
+
     # ------------------------------------------------------------------
     # iPhone / scale
     # ------------------------------------------------------------------
@@ -1165,8 +1380,17 @@ class MainWindow(QMainWindow):
             return
         try:
             self._canvas.set_video(path)
+            d = self._canvas.imported_video_duration_sec()
+            if d is not None and d > 0:
+                self._dur_spin.blockSignals(True)
+                self._dur_spin.setValue(max(1.0, float(d)))
+                self._dur_spin.blockSignals(False)
+                self._on_timeline_duration_changed(self._dur_spin.value())
+            # Align preview/timeline to first frame after import.
+            self._canvas.set_time(0.0)
             self._content_lbl.setText(os.path.basename(path))
             self._update_vid_src_hint()
+            self._update_timeline_visibility()
         except Exception as e:
             QMessageBox.warning(self, tr("err.title"), str(e))
 
@@ -1175,6 +1399,7 @@ class MainWindow(QMainWindow):
         self._canvas.screen_pixmap = None
         self._content_lbl.setText(tr("screen.none"))
         self._update_vid_src_hint()
+        self._update_timeline_visibility()
 
     def _update_vid_src_hint(self) -> None:
         d = self._canvas.imported_video_duration_sec()

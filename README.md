@@ -19,6 +19,16 @@ Desktop tool for promo assets on platforms like the App Store, X, Instagram, Red
   - If you are not comfortable coding, share the built-in sample template **and** the **“Custom code: details for you and for AI assistants”** checklist below with any AI assistant, then paste the generated code into the editor—this avoids non-running snippets (e.g. OpenCV-only previews, uncalled `def`, wrong time variables).
   - Click **Apply** to compile and run; after you stop typing for a short moment, changes can also apply automatically (see the in-app tooltip).
   - **Save** / **Delete** named presets: snippets are stored locally as JSON under the app’s data directory (Qt `AppDataLocation` for TangiPromo).
+- **Timeline (bottom-center player bar)** — When imported video exists or the current background is animated, the timeline appears under the canvas:
+  - Play/Pause controls preview time and imported video playback together.
+  - Drag-to-scrub seeks preview to an exact time point.
+  - Add/Delete breakpoints and jump between them quickly.
+  - Timeline length follows export duration; when loading a video, duration auto-initializes to video length and frame 0 is aligned.
+- **Effects (right panel, export-consistent)** — Add post effects with Python code to the fully rendered frame (background + phone + text + watermarks), using the same render pipeline as export:
+  - Useful for camera-like moves, region zoom, and time-window transitions.
+  - Built-in helper `zoom_region(x, y, w, h, scale)` uses normalized coordinates.
+  - `t`, `duration`, and `breakpoints` are available in effect code.
+  - Region guide toggle overlays crosshair and normalized `(x, y)` under the mouse for precise targeting.
 
 #### Custom code: details for you and for AI assistants
 
@@ -92,6 +102,16 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
   - **时间变量：** 请使用注入的 **`t`**（随时间递增的浮点数，量级接近秒）。环境里没有现成的 **`frame_index` / `total_frames`**；若需要循环相位，请用 **`t`** 自行换算（例如 `sin(t * k)`）。
   - **库：** 安装了 NumPy 时可用 **`np`**。背景**不依赖** OpenCV；若 AI 只给出 `cv2` + `imshow` 脚本，请要求它改为 **`painter` + Qt**（或 **NumPy → `QImage` → `drawImage`**），并明确使用 **`width`、`height`、`t`**。
   - **最低约定：** 合法自定义代码 = 执行后能用 **`painter`、`width`、`height`、`t`**（及可选 **`time`**）画满当前帧的片段。
+- **时间轴（画布底部播放器）** — 当存在导入视频或当前背景为动画时，画布底部会显示时间轴：
+  - 播放/暂停会同时控制预览时间与导入视频播放。
+  - 可拖动定位到任意时间点预览。
+  - 支持添加/删除断点并快速跳转。
+  - 时间轴长度跟随导出时长；导入视频时默认自动同步为视频长度并对齐到第 0 帧。
+- **Effects（右侧效果面板，导出一致）** — 可用 Python 代码对“整帧渲染结果”（背景 + 手机 + 文字 + 水印）做后处理，预览与导出使用同一渲染路径：
+  - 适合做推镜、区域放大、时间窗转场等效果。
+  - 内置 `zoom_region(x, y, w, h, scale)`（归一化坐标）。
+  - 效果代码可直接使用 `t`、`duration`、`breakpoints`。
+  - 可开启“画布区域指示器”显示鼠标位置十字线和归一化坐标，便于精确写效果参数。
 
 **其余功能**
 
