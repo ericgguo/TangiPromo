@@ -1615,6 +1615,7 @@ class MainWindow(QMainWindow):
 
             def on_done(p: str) -> None:
                 prog.close()
+                self._export_worker = None
                 self._status_lbl.setText(tr("status.exported_vid", path=p))
                 QMessageBox.information(
                     self, tr("export.done_title"), tr("export.done_msg", p=p)
@@ -1622,9 +1623,21 @@ class MainWindow(QMainWindow):
 
             def on_err(msg: str) -> None:
                 prog.close()
+                self._export_worker = None
                 QMessageBox.critical(self, tr("export.fail_title"), msg)
 
-            prog.canceled.connect(lambda: self._export_worker and self._export_worker.terminate())
+            def on_cancel() -> None:
+                if self._export_worker is not None:
+                    self._export_worker.request_cancel()
+                prog.setLabelText(tr("export.progress_cancel"))
+                prog.setCancelButton(None)
+
+            def on_cancelled() -> None:
+                prog.close()
+                self._export_worker = None
+                self._status_lbl.setText(tr("status.ready"))
+
+            prog.canceled.connect(on_cancel)
 
             self._export_worker = Exporter.start_video_export(
                 self._canvas,
@@ -1638,3 +1651,4 @@ class MainWindow(QMainWindow):
                 on_finished=on_done,
                 on_error=on_err,
             )
+            self._export_worker.cancelled.connect(on_cancelled)

@@ -141,6 +141,7 @@ class ExportWorker(QThread):
     progress = Signal(int)       # 0-100
     finished = Signal(str)       # output path
     error = Signal(str)
+    cancelled = Signal()
 
     def __init__(
         self,
@@ -162,6 +163,9 @@ class ExportWorker(QThread):
         self.fps = fps
         self.duration = duration
         self.ensure_full_import_video = ensure_full_import_video
+
+    def request_cancel(self) -> None:
+        self.requestInterruption()
 
     def run(self) -> None:
         try:
@@ -260,6 +264,10 @@ class ExportWorker(QThread):
             row_bytes = ow * 3
 
             for i in range(total):
+                if self.isInterruptionRequested():
+                    self.cancelled.emit()
+                    return
+
                 t = i / self.fps
 
                 if export_cap is not None and src_fps > 1e-6 and not eof:
@@ -267,6 +275,9 @@ class ExportWorker(QThread):
                     target_idx = int(tt * src_fps + 0.5)
 
                     while current_idx is not None and current_idx < target_idx:
+                        if self.isInterruptionRequested():
+                            self.cancelled.emit()
+                            return
                         ret, frame = export_cap.read()
                         if not ret:
                             eof = True
@@ -306,6 +317,9 @@ class ExportWorker(QThread):
                     try:
                         ffmpeg_proc.stdin.write(raw)
                     except (BrokenPipeError, OSError):
+                        if self.isInterruptionRequested():
+                            self.cancelled.emit()
+                            return
                         _cleanup_ffmpeg(ffmpeg_proc)
                         # HW encoder rejected → retry with SW libx264
                         sw_cmd = _build_ffmpeg_cmd(
@@ -351,7 +365,12 @@ class ExportWorker(QThread):
             if use_ffmpeg and ffmpeg_proc:
                 if ffmpeg_proc.stdin:
                     ffmpeg_proc.stdin.close()
-                ffmpeg_proc.wait()
+                try:
+                    ffmpeg_proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    _cleanup_ffmpeg(ffmpeg_proc)
+                    self.error.emit(tr("export.err.writer", path=self.path))
+                    return
                 if ffmpeg_proc.returncode != 0:
                     stderr_out = ffmpeg_proc.stderr.read() if ffmpeg_proc.stderr else b""
                     self.error.emit(f"ffmpeg exit {ffmpeg_proc.returncode}: {stderr_out.decode(errors='replace')}")
