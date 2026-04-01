@@ -92,6 +92,7 @@ class Canvas(QWidget):
         self.show_iphone: bool = True
 
         self.screen_pixmap: Optional[QPixmap] = None   # static image
+        self._screen_image_path: Optional[str] = None
         self.video_cap = None                           # cv2.VideoCapture
         self.video_frame: Optional[QPixmap] = None
         self._video_path: Optional[str] = None          # 源文件路径（导出线程可另开 capture）
@@ -176,6 +177,12 @@ class Canvas(QWidget):
         self.video_frame = None
         self._video_fps = 30.0
         self._video_duration_sec = None
+
+    def set_screen_image_path(self, path: str) -> None:
+        self._screen_image_path = path
+
+    def screen_image_path(self) -> Optional[str]:
+        return self._screen_image_path
 
     def set_export_active(self, active: bool) -> None:
         """导出 MP4 时设为 True：主线程暂停对同一 VideoCapture 的读取，避免与解码线程冲突。"""

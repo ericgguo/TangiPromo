@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from functools import partial
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt, QSettings, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPixmap
@@ -19,12 +19,14 @@ from PySide6.QtWidgets import (
 from .backgrounds import ALL_BACKGROUNDS, BACKGROUND_MAP
 from .backgrounds.custom import CustomCodeBackground
 from .custom_bg_store import CustomBgStore
+from .effect_store import EffectStore
 from .canvas import Canvas
 from .exporter import Exporter, ExportWorker, RESOLUTIONS
 from .iphone import MODELS
 from .iphone_manifest import DEVICE_PNG
 from .text_layer import TextLayer
 from .watermark import make_watermark_from_path
+from .workflow_preset_store import WorkflowPresetStore
 from .i18n import (
     EN,
     RESOLUTION_I18N_KEY,
@@ -131,6 +133,8 @@ class MainWindow(QMainWindow):
             cls().name: cls() for cls in ALL_BACKGROUNDS
         }
         self._custom_store = CustomBgStore()
+        self._effect_store = EffectStore()
+        self._workflow_store = WorkflowPresetStore()
         self._settings = QSettings()
 
         self._build_ui()
@@ -140,6 +144,12 @@ class MainWindow(QMainWindow):
         last_raw = self._settings.value("custom_bg_last_id", "")
         last_id = str(last_raw).strip() if last_raw else ""
         self._refresh_custom_preset_combo(last_id if last_id else None)
+        eff_last_raw = self._settings.value("effect_last_id", "")
+        eff_last_id = str(eff_last_raw).strip() if eff_last_raw else ""
+        self._refresh_effect_preset_combo(eff_last_id if eff_last_id else None)
+        flow_last_raw = self._settings.value("workflow_last_id", "")
+        flow_last_id = str(flow_last_raw).strip() if flow_last_raw else ""
+        self._refresh_workflow_preset_combo(flow_last_id if flow_last_id else None)
 
         # Default background
         first_name = ALL_BACKGROUNDS[0]().name
@@ -241,6 +251,30 @@ class MainWindow(QMainWindow):
         self._lang_combo.blockSignals(False)
         self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
         lay.addWidget(self._lang_combo)
+
+        self._gb_flow, vl_flow = _group(tr("group.workflow"))
+        self._sec_flow_presets = SectionLabel(tr("workflow.section"))
+        vl_flow.addWidget(self._sec_flow_presets)
+        self._workflow_combo = QComboBox()
+        vl_flow.addWidget(self._workflow_combo)
+        flow_actions = QWidget()
+        flow_lay = QHBoxLayout(flow_actions)
+        flow_lay.setContentsMargins(0, 0, 0, 0)
+        flow_lay.setSpacing(8)
+        self._workflow_name = QLineEdit()
+        self._workflow_name.setPlaceholderText(tr("workflow.name_ph"))
+        self._workflow_save_btn = QPushButton(tr("workflow.save"))
+        self._workflow_save_btn.setObjectName("primaryBtn")
+        self._workflow_load_btn = QPushButton(tr("workflow.load"))
+        self._workflow_del_btn = QPushButton(tr("workflow.delete"))
+        self._workflow_del_btn.setObjectName("ghostBtn")
+        self._workflow_del_btn.setEnabled(False)
+        flow_lay.addWidget(self._workflow_name, 1)
+        flow_lay.addWidget(self._workflow_save_btn)
+        flow_lay.addWidget(self._workflow_load_btn)
+        flow_lay.addWidget(self._workflow_del_btn)
+        vl_flow.addWidget(flow_actions)
+        lay.addWidget(self._gb_flow)
 
         # ── Output ratio
         self._gb_ratio, vl = _group(tr("group.ratio"))
@@ -462,6 +496,25 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._gb_txt)
 
         self._gb_fx, vl_fx = _group(tr("group.effects"))
+        self._sec_fx_presets = SectionLabel(tr("effects.preset_section"))
+        vl_fx.addWidget(self._sec_fx_presets)
+        self._fx_preset_combo = QComboBox()
+        vl_fx.addWidget(self._fx_preset_combo)
+        fx_actions = QWidget()
+        fx_lay = QHBoxLayout(fx_actions)
+        fx_lay.setContentsMargins(0, 0, 0, 0)
+        fx_lay.setSpacing(8)
+        self._fx_preset_name = QLineEdit()
+        self._fx_preset_name.setPlaceholderText(tr("effects.name_ph"))
+        self._fx_preset_save_btn = QPushButton(tr("effects.save"))
+        self._fx_preset_save_btn.setObjectName("primaryBtn")
+        self._fx_preset_del_btn = QPushButton(tr("effects.delete"))
+        self._fx_preset_del_btn.setObjectName("ghostBtn")
+        self._fx_preset_del_btn.setEnabled(False)
+        fx_lay.addWidget(self._fx_preset_name, 1)
+        fx_lay.addWidget(self._fx_preset_save_btn)
+        fx_lay.addWidget(self._fx_preset_del_btn)
+        vl_fx.addWidget(fx_actions)
         self._fx_enable_cb = QCheckBox(tr("effects.enable"))
         self._fx_region_guide_cb = QCheckBox(tr("effects.region_guide"))
         self._fx_help_lbl = QLabel(tr("effects.help"))
@@ -669,10 +722,17 @@ class MainWindow(QMainWindow):
         self._fx_enable_cb.toggled.connect(self._on_effect_toggle)
         self._fx_region_guide_cb.toggled.connect(self._on_region_guide_toggle)
         self._fx_code_edit.textChanged.connect(self._on_effect_code_changed)
+        self._fx_preset_combo.currentIndexChanged.connect(self._on_effect_preset_combo_changed)
+        self._fx_preset_save_btn.clicked.connect(self._save_effect_preset)
+        self._fx_preset_del_btn.clicked.connect(self._delete_effect_preset)
 
         self._preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
         self._preset_save_btn.clicked.connect(self._save_custom_preset)
         self._preset_del_btn.clicked.connect(self._delete_custom_preset)
+        self._workflow_combo.currentIndexChanged.connect(self._on_workflow_combo_changed)
+        self._workflow_save_btn.clicked.connect(self._save_workflow_preset)
+        self._workflow_load_btn.clicked.connect(self._load_selected_workflow_preset)
+        self._workflow_del_btn.clicked.connect(self._delete_workflow_preset)
 
         self._timeline_ui_timer = QTimer(self)
         self._timeline_ui_timer.timeout.connect(self._sync_timeline_from_canvas)
@@ -696,6 +756,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("app.title"))
         self._status_lbl.setText(tr("status.ready"))
         self._sec_lang.setText(tr("lang.label"))
+        self._gb_flow.setTitle(tr("group.workflow"))
+        self._sec_flow_presets.setText(tr("workflow.section"))
+        self._workflow_name.setPlaceholderText(tr("workflow.name_ph"))
+        self._workflow_save_btn.setText(tr("workflow.save"))
+        self._workflow_load_btn.setText(tr("workflow.load"))
+        self._workflow_del_btn.setText(tr("workflow.delete"))
+        if self._workflow_combo.count() > 0 and self._workflow_combo.itemData(0) is None:
+            self._workflow_combo.setItemText(0, tr("workflow.draft"))
         self._gb_ratio.setTitle(tr("group.ratio"))
         for i, rk in enumerate(self._RATIO_I18N_KEYS):
             if i < self._ratio_combo.count():
@@ -782,6 +850,12 @@ class MainWindow(QMainWindow):
         self._full_import_cb.setToolTip(tr("export.full_vid_tip"))
         self._export_btn.setText(tr("export.btn"))
         self._gb_fx.setTitle(tr("group.effects"))
+        self._sec_fx_presets.setText(tr("effects.preset_section"))
+        self._fx_preset_name.setPlaceholderText(tr("effects.name_ph"))
+        self._fx_preset_save_btn.setText(tr("effects.save"))
+        self._fx_preset_del_btn.setText(tr("effects.delete"))
+        if self._fx_preset_combo.count() > 0 and self._fx_preset_combo.itemData(0) is None:
+            self._fx_preset_combo.setItemText(0, tr("effects.draft"))
         self._fx_enable_cb.setText(tr("effects.enable"))
         self._fx_region_guide_cb.setText(tr("effects.region_guide"))
         self._fx_help_lbl.setText(tr("effects.help"))
@@ -1056,6 +1130,254 @@ class MainWindow(QMainWindow):
         )
         self._apply_watermarks_from_ui()
 
+    def _color_to_hex(self, c: QColor) -> str:
+        return c.name(QColor.NameFormat.HexArgb)
+
+    def _color_from_hex(self, s: str, fallback: QColor) -> QColor:
+        c = QColor(s)
+        return c if c.isValid() else fallback
+
+    def _serialize_text_layer(self, layer: TextLayer) -> dict[str, Any]:
+        return {
+            "name": layer.name,
+            "text": layer.text,
+            "x": layer.x,
+            "y": layer.y,
+            "font_family": layer.font_family,
+            "font_size_pt": layer.font_size_pt,
+            "bold": layer.bold,
+            "italic": layer.italic,
+            "color": self._color_to_hex(layer.color),
+            "align": int(layer.align),
+            "shadow": layer.shadow,
+            "shadow_color": self._color_to_hex(layer.shadow_color),
+            "shadow_offset": list(layer.shadow_offset),
+            "outline": layer.outline,
+            "outline_color": self._color_to_hex(layer.outline_color),
+            "outline_width": layer.outline_width,
+            "visible": layer.visible,
+        }
+
+    def _deserialize_text_layer(self, data: dict[str, Any]) -> TextLayer:
+        layer = TextLayer()
+        layer.name = str(data.get("name", ""))
+        layer.text = str(data.get("text", ""))
+        layer.x = float(data.get("x", 0.5))
+        layer.y = float(data.get("y", 0.85))
+        layer.font_family = str(data.get("font_family", layer.font_family))
+        layer.font_size_pt = int(data.get("font_size_pt", layer.font_size_pt))
+        layer.bold = bool(data.get("bold", False))
+        layer.italic = bool(data.get("italic", False))
+        layer.color = self._color_from_hex(str(data.get("color", "")), layer.color)
+        layer.align = Qt.AlignmentFlag(int(data.get("align", int(Qt.AlignmentFlag.AlignHCenter))))
+        layer.shadow = bool(data.get("shadow", True))
+        layer.shadow_color = self._color_from_hex(
+            str(data.get("shadow_color", "")), layer.shadow_color
+        )
+        so = data.get("shadow_offset", list(layer.shadow_offset))
+        if isinstance(so, list) and len(so) >= 2:
+            layer.shadow_offset = (float(so[0]), float(so[1]))
+        layer.outline = bool(data.get("outline", False))
+        layer.outline_color = self._color_from_hex(
+            str(data.get("outline_color", "")), layer.outline_color
+        )
+        layer.outline_width = float(data.get("outline_width", layer.outline_width))
+        layer.visible = bool(data.get("visible", True))
+        return layer
+
+    def _serialize_watermark(self, st) -> dict[str, Any]:
+        return {
+            "id": st.id,
+            "title": st.title,
+            "image_path": st.image_path,
+            "enabled": st.enabled,
+            "color": self._color_to_hex(st.color),
+            "center_x_pct": st.center_x_pct,
+            "center_y_pct": st.center_y_pct,
+            "width_pct": st.width_pct,
+        }
+
+    def _deserialize_watermark(self, data: dict[str, Any]):
+        st = make_watermark_from_path(str(data.get("image_path", "")))
+        st.id = str(data.get("id", st.id))
+        st.title = str(data.get("title", st.title))
+        st.enabled = bool(data.get("enabled", st.enabled))
+        st.color = self._color_from_hex(str(data.get("color", "")), st.color)
+        st.center_x_pct = float(data.get("center_x_pct", st.center_x_pct))
+        st.center_y_pct = float(data.get("center_y_pct", st.center_y_pct))
+        st.width_pct = float(data.get("width_pct", st.width_pct))
+        return st
+
+    def collect_workflow_preset(self) -> dict[str, Any]:
+        bg_preset_id = self._preset_combo.currentData()
+        fx_preset_id = self._fx_preset_combo.currentData()
+        content_path = None
+        content_type = "none"
+        if self._canvas.video_source_path():
+            content_path = self._canvas.video_source_path()
+            content_type = "video"
+        elif self._canvas.screen_image_path():
+            content_path = self._canvas.screen_image_path()
+            content_type = "image"
+        return {
+            "ratio_idx": self._ratio_combo.currentIndex(),
+            "export": {
+                "format_idx": self._exp_format.currentIndex(),
+                "resolution_key": self._exp_res.currentData(),
+                "fps": self._fps_spin.value(),
+                "duration": self._dur_spin.value(),
+                "full_import_video": self._full_import_cb.isChecked(),
+            },
+            "background": {
+                "key": self._bg_combo.currentData(),
+                "speed": self._spd_slider.value(),
+                "custom_code": self._code_edit.toPlainText(),
+                "preset_id": str(bg_preset_id) if bg_preset_id else None,
+            },
+            "effects": {
+                "enabled": self._fx_enable_cb.isChecked(),
+                "region_guide": self._fx_region_guide_cb.isChecked(),
+                "code": self._fx_code_edit.toPlainText(),
+                "preset_id": str(fx_preset_id) if fx_preset_id else None,
+                "breakpoints": list(self._timeline_breakpoints),
+            },
+            "phone": {
+                "model": self._model_combo.currentData(),
+                "theme": self._theme_combo.currentData(),
+                "show": self._show_phone_cb.isChecked(),
+                "scale": self._phone_scale_spin.value(),
+                "x": self._phone_x_spin.value(),
+                "y": self._phone_y_spin.value(),
+            },
+            "content": {"type": content_type, "path": content_path},
+            "watermarks": [
+                self._serialize_watermark(st) for st in self._canvas.watermark_states
+            ],
+            "text_layers": [
+                self._serialize_text_layer(layer) for layer in self._canvas.text_layers
+            ],
+        }
+
+    def _load_image_from_path(self, path: str) -> bool:
+        pix = QPixmap(path)
+        if pix.isNull():
+            return False
+        self._canvas.clear_video()
+        self._canvas.set_screen_image_path(path)
+        self._canvas.screen_pixmap = pix
+        self._content_lbl.setText(os.path.basename(path))
+        return True
+
+    def _load_video_from_path(self, path: str) -> bool:
+        try:
+            self._canvas.set_video(path)
+            self._canvas.set_screen_image_path("")
+            self._content_lbl.setText(os.path.basename(path))
+            return True
+        except Exception:
+            return False
+
+    def apply_workflow_preset(self, payload: dict[str, Any]) -> list[str]:
+        missing: list[str] = []
+        self._ratio_combo.setCurrentIndex(int(payload.get("ratio_idx", 0)))
+
+        exp = payload.get("export", {})
+        if isinstance(exp, dict):
+            self._exp_format.setCurrentIndex(int(exp.get("format_idx", 0)))
+            res_key = exp.get("resolution_key")
+            if res_key is not None:
+                idx = self._exp_res.findData(res_key)
+                if idx >= 0:
+                    self._exp_res.setCurrentIndex(idx)
+            self._fps_spin.setValue(float(exp.get("fps", self._fps_spin.value())))
+            self._dur_spin.setValue(float(exp.get("duration", self._dur_spin.value())))
+            self._full_import_cb.setChecked(bool(exp.get("full_import_video", False)))
+
+        bg = payload.get("background", {})
+        if isinstance(bg, dict):
+            bg_key = bg.get("key")
+            idx = self._bg_combo.findData(bg_key)
+            if idx >= 0:
+                self._bg_combo.setCurrentIndex(idx)
+            self._spd_slider.setValue(int(bg.get("speed", self._spd_slider.value())))
+            self._code_edit.setPlainText(str(bg.get("custom_code", self._code_edit.toPlainText())))
+            self._apply_custom_code()
+            pid = bg.get("preset_id")
+            idx = self._preset_combo.findData(pid)
+            if idx >= 0:
+                self._preset_combo.setCurrentIndex(idx)
+
+        eff = payload.get("effects", {})
+        if isinstance(eff, dict):
+            self._fx_enable_cb.setChecked(bool(eff.get("enabled", False)))
+            self._fx_region_guide_cb.setChecked(bool(eff.get("region_guide", False)))
+            self._fx_code_edit.setPlainText(str(eff.get("code", "")))
+            self._timeline_breakpoints = [float(x) for x in eff.get("breakpoints", [])]
+            self._refresh_breakpoint_combo()
+            pid = eff.get("preset_id")
+            idx = self._fx_preset_combo.findData(pid)
+            if idx >= 0:
+                self._fx_preset_combo.setCurrentIndex(idx)
+            self._apply_effects_code()
+
+        phone = payload.get("phone", {})
+        if isinstance(phone, dict):
+            idx = self._model_combo.findData(phone.get("model"))
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
+            tidx = self._theme_combo.findData(phone.get("theme"))
+            if tidx >= 0:
+                self._theme_combo.setCurrentIndex(tidx)
+            self._show_phone_cb.setChecked(bool(phone.get("show", True)))
+            self._phone_scale_spin.setValue(float(phone.get("scale", 72)))
+            self._phone_x_spin.setValue(float(phone.get("x", 50)))
+            self._phone_y_spin.setValue(float(phone.get("y", 50)))
+
+        content = payload.get("content", {})
+        if isinstance(content, dict):
+            ctype = str(content.get("type", "none"))
+            path = content.get("path")
+            if ctype == "video" and isinstance(path, str) and path:
+                if os.path.isfile(path):
+                    self._load_video_from_path(path)
+                else:
+                    missing.append(path)
+                    self._clear_content()
+            elif ctype.startswith("image") and isinstance(path, str) and path:
+                if os.path.isfile(path):
+                    self._load_image_from_path(path)
+                else:
+                    missing.append(path)
+                    self._clear_content()
+            else:
+                self._clear_content()
+
+        self._canvas.watermark_states = []
+        for item in payload.get("watermarks", []):
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("image_path", ""))
+            if not path or not os.path.isfile(path):
+                if path:
+                    missing.append(path)
+                continue
+            self._canvas.watermark_states.append(self._deserialize_watermark(item))
+        self._canvas.clear_watermark_pixmap_cache()
+        self._rebuild_watermark_panel()
+
+        self._canvas.text_layers = []
+        for item in payload.get("text_layers", []):
+            if isinstance(item, dict):
+                self._canvas.text_layers.append(self._deserialize_text_layer(item))
+        self._refresh_layer_list()
+        self._txt_stack.setCurrentIndex(0)
+        self._canvas.selected_layer = -1
+        self._canvas.set_time(0.0)
+        self._update_vid_src_hint()
+        self._update_timeline_visibility()
+        self._canvas.update()
+        return missing
+
     # ------------------------------------------------------------------
     # Ratio
     # ------------------------------------------------------------------
@@ -1190,6 +1512,142 @@ class MainWindow(QMainWindow):
         self._custom_store.delete(str(pid))
         self._settings.setValue("custom_bg_last_id", "")
         self._refresh_custom_preset_combo(select_id=None)
+
+    def _refresh_effect_preset_combo(self, select_id: Optional[str] = None) -> None:
+        self._fx_preset_combo.blockSignals(True)
+        self._fx_preset_combo.clear()
+        self._fx_preset_combo.addItem(tr("effects.draft"), None)
+        for pr in self._effect_store.presets:
+            self._fx_preset_combo.addItem(pr.name, pr.id)
+        sel = 0
+        if select_id:
+            for i in range(self._fx_preset_combo.count()):
+                if self._fx_preset_combo.itemData(i) == select_id:
+                    sel = i
+                    break
+        self._fx_preset_combo.setCurrentIndex(sel)
+        self._fx_preset_combo.blockSignals(False)
+        self._on_effect_preset_combo_changed(sel)
+
+    def _on_effect_preset_combo_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        pid = self._fx_preset_combo.itemData(idx)
+        self._fx_preset_del_btn.setEnabled(pid is not None)
+        if pid is None:
+            self._fx_preset_name.clear()
+            self._settings.setValue("effect_last_id", "")
+            return
+        pr = self._effect_store.by_id(str(pid))
+        if not pr:
+            return
+        self._fx_preset_name.setText(pr.name)
+        self._settings.setValue("effect_last_id", pr.id)
+        self._fx_code_edit.blockSignals(True)
+        self._fx_code_edit.setPlainText(pr.code)
+        self._fx_code_edit.blockSignals(False)
+        self._on_effect_code_changed()
+
+    def _save_effect_preset(self) -> None:
+        name = self._fx_preset_name.text().strip()
+        if not name:
+            QMessageBox.information(self, tr("err.title"), tr("effects.need_name"))
+            return
+        pid = self._fx_preset_combo.currentData()
+        pid_str = str(pid) if pid else None
+        pr = self._effect_store.upsert(name, self._fx_code_edit.toPlainText(), pid_str)
+        self._refresh_effect_preset_combo(select_id=pr.id)
+        self._settings.setValue("effect_last_id", pr.id)
+
+    def _delete_effect_preset(self) -> None:
+        pid = self._fx_preset_combo.currentData()
+        if not pid:
+            return
+        r = QMessageBox.question(
+            self,
+            tr("effects.delete_title"),
+            tr("effects.delete_confirm"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        self._effect_store.delete(str(pid))
+        self._settings.setValue("effect_last_id", "")
+        self._refresh_effect_preset_combo(select_id=None)
+
+    def _refresh_workflow_preset_combo(self, select_id: Optional[str] = None) -> None:
+        self._workflow_combo.blockSignals(True)
+        self._workflow_combo.clear()
+        self._workflow_combo.addItem(tr("workflow.draft"), None)
+        for pr in self._workflow_store.presets:
+            self._workflow_combo.addItem(pr.name, pr.id)
+        sel = 0
+        if select_id:
+            for i in range(self._workflow_combo.count()):
+                if self._workflow_combo.itemData(i) == select_id:
+                    sel = i
+                    break
+        self._workflow_combo.setCurrentIndex(sel)
+        self._workflow_combo.blockSignals(False)
+        self._on_workflow_combo_changed(sel)
+
+    def _on_workflow_combo_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        pid = self._workflow_combo.itemData(idx)
+        self._workflow_del_btn.setEnabled(pid is not None)
+        if pid is None:
+            self._workflow_name.clear()
+            self._settings.setValue("workflow_last_id", "")
+            return
+        pr = self._workflow_store.by_id(str(pid))
+        if not pr:
+            return
+        self._workflow_name.setText(pr.name)
+        self._settings.setValue("workflow_last_id", pr.id)
+
+    def _save_workflow_preset(self) -> None:
+        name = self._workflow_name.text().strip()
+        if not name:
+            QMessageBox.information(self, tr("err.title"), tr("workflow.need_name"))
+            return
+        pid = self._workflow_combo.currentData()
+        pid_str = str(pid) if pid else None
+        pr = self._workflow_store.upsert(name, self.collect_workflow_preset(), pid_str)
+        self._refresh_workflow_preset_combo(select_id=pr.id)
+        self._settings.setValue("workflow_last_id", pr.id)
+
+    def _load_selected_workflow_preset(self) -> None:
+        pid = self._workflow_combo.currentData()
+        if not pid:
+            return
+        pr = self._workflow_store.by_id(str(pid))
+        if not pr:
+            return
+        missing = self.apply_workflow_preset(pr.payload)
+        if missing:
+            uniq = "\n".join(f"- {p}" for p in dict.fromkeys(missing))
+            QMessageBox.warning(
+                self, tr("workflow.missing_title"), tr("workflow.missing_body", paths=uniq)
+            )
+
+    def _delete_workflow_preset(self) -> None:
+        pid = self._workflow_combo.currentData()
+        if not pid:
+            return
+        r = QMessageBox.question(
+            self,
+            tr("workflow.delete_title"),
+            tr("workflow.delete_confirm"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        self._workflow_store.delete(str(pid))
+        self._settings.setValue("workflow_last_id", "")
+        self._refresh_workflow_preset_combo(select_id=None)
 
     def _flush_custom_code_to_bg(self) -> None:
         bg = self._bg_instances.get(_CUSTOM_BG_NAME)
@@ -1368,6 +1826,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("err.title"), tr("err.load_img"))
             return
         self._canvas.clear_video()
+        self._canvas.set_screen_image_path(path)
         self._canvas.screen_pixmap = pix
         self._content_lbl.setText(os.path.basename(path))
 
@@ -1396,6 +1855,7 @@ class MainWindow(QMainWindow):
 
     def _clear_content(self) -> None:
         self._canvas.clear_video()
+        self._canvas.set_screen_image_path("")
         self._canvas.screen_pixmap = None
         self._content_lbl.setText(tr("screen.none"))
         self._update_vid_src_hint()

@@ -29,6 +29,8 @@ Desktop tool for promo assets on platforms like the App Store, X, Instagram, Red
   - Built-in helper `zoom_region(x, y, w, h, scale)` uses normalized coordinates.
   - `t`, `duration`, and `breakpoints` are available in effect code.
   - Region guide toggle overlays crosshair and normalized `(x, y)` under the mouse for precise targeting.
+  - Effect code presets can be saved/reused just like custom background code presets.
+- **Workflow presets** — Save and restore a named end-to-end setup, including aspect ratio, device, loaded content path, watermarks, text layers, background/effect code, breakpoints, and export-related settings. Missing local assets are reported but other settings still load.
 
 #### Custom code: details for you and for AI assistants
 
@@ -112,6 +114,8 @@ Use the **same** interpreter for `pip` and `python` so imports resolve. Dependen
   - 内置 `zoom_region(x, y, w, h, scale)`（归一化坐标）。
   - 效果代码可直接使用 `t`、`duration`、`breakpoints`。
   - 可开启“画布区域指示器”显示鼠标位置十字线和归一化坐标，便于精确写效果参数。
+  - Effect 代码预设支持像背景代码预设一样保存、复用。
+- **流程预设** — 可把当前整套工作流命名保存并一键恢复，包括比例、设备、导入内容路径、水印、文字图层、背景/Effect 代码、断点和导出参数等。若本地资源缺失，会提示缺失项，但其余参数仍会继续恢复。
 
 **其余功能**
 
