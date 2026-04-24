@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QProgressDialog, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
-    QStackedWidget, QStatusBar, QTextEdit, QVBoxLayout, QWidget,
+    QStackedWidget, QStatusBar, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from .backgrounds import ALL_BACKGROUNDS, BACKGROUND_MAP
@@ -102,20 +103,73 @@ class SectionLabel(QLabel):
 
 # ── Scroll panel builder ────────────────────────────────────────────────────
 
-def _scroll_panel() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
+def _scroll_panel(
+    min_width: int = 268,
+    max_width: int = 340,
+    margins: tuple[int, int, int, int] = (14, 14, 14, 14),
+    spacing: int = 10,
+) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     area = QScrollArea()
     area.setWidgetResizable(True)
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    area.setMinimumWidth(248)
-    area.setMaximumWidth(324)
+    if min_width:
+        area.setMinimumWidth(min_width)
+    if max_width:
+        area.setMaximumWidth(max_width)
     area.setFrameShape(QScrollArea.Shape.NoFrame)
 
     inner = QWidget()
     lay = QVBoxLayout(inner)
-    lay.setContentsMargins(14, 16, 14, 16)
-    lay.setSpacing(10)
+    lay.setContentsMargins(*margins)
+    lay.setSpacing(spacing)
     area.setWidget(inner)
     return area, inner, lay
+
+
+def _page_scroll(
+    margins: tuple[int, int, int, int] = (12, 12, 12, 12),
+    spacing: int = 10,
+) -> tuple[QScrollArea, QVBoxLayout]:
+    """Scrollable page used as a tab child (takes full tab width)."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    area.setFrameShape(QScrollArea.Shape.NoFrame)
+    inner = QWidget()
+    lay = QVBoxLayout(inner)
+    lay.setContentsMargins(*margins)
+    lay.setSpacing(spacing)
+    area.setWidget(inner)
+    return area, lay
+
+
+_SIDE_TAB_QSS = """
+QTabWidget::pane {
+    border: none;
+    background: #141418;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+QTabWidget::tab-bar { alignment: left; }
+QTabBar {
+    background: #0f0f13;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+QTabBar::tab {
+    background: transparent;
+    color: #8a8a93;
+    padding: 10px 14px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 12px;
+    font-weight: 500;
+    min-width: 56px;
+}
+QTabBar::tab:hover { color: #d4d4dc; }
+QTabBar::tab:selected {
+    color: #f4f4f6;
+    border-bottom: 2px solid #7c6bff;
+}
+"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -128,7 +182,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(tr("app.title"))
-        self.resize(1440, 900)
+        self.resize(1320, 820)
+        self.setMinimumSize(1080, 640)
 
         self._canvas = Canvas()
         self._export_worker: Optional[ExportWorker] = None
@@ -185,6 +240,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(2)
+        splitter.setChildrenCollapsible(False)
 
         splitter.addWidget(self._build_left_panel())
         splitter.addWidget(self._build_center_panel())
@@ -193,7 +249,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([260, 900, 280])
+        splitter.setSizes([288, 720, 312])
 
         self.setCentralWidget(splitter)
 
@@ -260,11 +316,21 @@ class MainWindow(QMainWindow):
 
     # ── Left panel ──────────────────────────────────────────────────────
 
-    def _build_left_panel(self) -> QScrollArea:
-        area, _, lay = _scroll_panel()
+    def _build_left_panel(self) -> QWidget:
+        host = QWidget()
+        host.setMinimumWidth(280)
+        host.setMaximumWidth(360)
+        host_lay = QVBoxLayout(host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        host_lay.setSpacing(0)
 
+        # Language selector lives above the tab widget — always visible.
+        header = QWidget()
+        header_lay = QVBoxLayout(header)
+        header_lay.setContentsMargins(14, 14, 14, 8)
+        header_lay.setSpacing(6)
         self._sec_lang = SectionLabel(tr("lang.label"))
-        lay.addWidget(self._sec_lang)
+        header_lay.addWidget(self._sec_lang)
         self._lang_combo = QComboBox()
         self._lang_combo.blockSignals(True)
         self._lang_combo.addItem("English", "en")
@@ -272,7 +338,16 @@ class MainWindow(QMainWindow):
         self._lang_combo.setCurrentIndex(0)
         self._lang_combo.blockSignals(False)
         self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        lay.addWidget(self._lang_combo)
+        header_lay.addWidget(self._lang_combo)
+        host_lay.addWidget(header)
+
+        self._left_tabs = QTabWidget()
+        self._left_tabs.setStyleSheet(_SIDE_TAB_QSS)
+        self._left_tabs.setDocumentMode(True)
+        host_lay.addWidget(self._left_tabs, 1)
+
+        # Tab: Design — workflow / ratio / background
+        design_page, lay = _page_scroll()
 
         self._gb_flow, vl_flow = _group(tr("group.workflow"))
         self._sec_flow_presets = SectionLabel(tr("workflow.section"))
@@ -332,6 +407,11 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(self._gb_bg)
 
+        lay.addStretch()
+        self._left_tabs.addTab(design_page, tr("tab.design"))
+
+        # Tab: Code — custom background code editor
+        code_page, vl_code_host = _page_scroll()
         self._code_group, vl_code = _group(tr("group.code"))
         self._sec_code_presets = SectionLabel(tr("code.preset_section"))
         vl_code.addWidget(self._sec_code_presets)
@@ -378,16 +458,30 @@ class MainWindow(QMainWindow):
         self._code_apply_btn.setToolTip(tr("code.apply_tip"))
         vl_code.addWidget(self._code_apply_btn)
 
-        self._code_group.hide()
-        lay.addWidget(self._code_group)
+        vl_code_host.addWidget(self._code_group)
+        self._code_group.show()  # always visible inside its own tab
+        vl_code_host.addStretch()
+        self._code_tab_index = self._left_tabs.addTab(code_page, tr("tab.code"))
 
-        lay.addStretch()
-        return area
+        return host
 
     # ── Right panel ─────────────────────────────────────────────────────
 
-    def _build_right_panel(self) -> QScrollArea:
-        area, _, lay = _scroll_panel()
+    def _build_right_panel(self) -> QWidget:
+        host = QWidget()
+        host.setMinimumWidth(300)
+        host.setMaximumWidth(380)
+        host_lay = QVBoxLayout(host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        host_lay.setSpacing(0)
+
+        self._right_tabs = QTabWidget()
+        self._right_tabs.setStyleSheet(_SIDE_TAB_QSS)
+        self._right_tabs.setDocumentMode(True)
+        host_lay.addWidget(self._right_tabs, 1)
+
+        # ── Tab: Device (phone + screen + watermark) ─────────────────────
+        device_page, lay = _page_scroll()
 
         self._gb_ph, vl_ph = _group(tr("group.phone"))
 
@@ -488,7 +582,11 @@ class MainWindow(QMainWindow):
         vl_wm.addWidget(self._add_wm_btn)
         self._rebuild_watermark_panel()
         lay.addWidget(self._gb_wm)
+        lay.addStretch()
+        self._right_tabs.addTab(device_page, tr("tab.device"))
 
+        # ── Tab: Layers (text) ──────────────────────────────────────────
+        layers_page, lay = _page_scroll()
         self._gb_txt, vl_txt = _group(tr("group.text"))
 
         self._layer_list = QListWidget()
@@ -521,7 +619,11 @@ class MainWindow(QMainWindow):
 
         vl_txt.addWidget(self._txt_stack)
         lay.addWidget(self._gb_txt)
+        lay.addStretch()
+        self._right_tabs.addTab(layers_page, tr("tab.layers"))
 
+        # ── Tab: Effects ────────────────────────────────────────────────
+        effects_page, lay = _page_scroll()
         self._gb_fx, vl_fx = _group(tr("group.effects"))
         self._sec_fx_presets = SectionLabel(tr("effects.preset_section"))
         vl_fx.addWidget(self._sec_fx_presets)
@@ -558,7 +660,11 @@ class MainWindow(QMainWindow):
         vl_fx.addWidget(self._fx_code_edit)
         vl_fx.addWidget(self._fx_apply_btn)
         lay.addWidget(self._gb_fx)
+        lay.addStretch()
+        self._right_tabs.addTab(effects_page, tr("tab.effects"))
 
+        # ── Tab: Export ─────────────────────────────────────────────────
+        export_page, lay = _page_scroll()
         self._gb_exp, vl_exp = _group(tr("group.export"))
 
         self._exp_format = QComboBox()
@@ -610,13 +716,14 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(self._gb_exp)
         lay.addStretch()
+        self._right_tabs.addTab(export_page, tr("tab.export"))
 
         # Connect text layer signals
         self._add_text_layer_btn.clicked.connect(self._add_text_layer)
         self._del_layer_btn.clicked.connect(self._delete_text_layer)
         self._layer_list.currentRowChanged.connect(self._on_layer_row_changed)
 
-        return area
+        return host
 
     def _build_text_editor(self) -> QWidget:
         w = QWidget()
@@ -783,6 +890,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("app.title"))
         self._status_lbl.setText(tr("status.ready"))
         self._sec_lang.setText(tr("lang.label"))
+        if hasattr(self, "_left_tabs"):
+            left_labels = [tr("tab.design"), tr("tab.code")]
+            for i, label in enumerate(left_labels):
+                if i < self._left_tabs.count():
+                    self._left_tabs.setTabText(i, label)
+        if hasattr(self, "_right_tabs"):
+            right_labels = [
+                tr("tab.device"), tr("tab.layers"),
+                tr("tab.effects"), tr("tab.export"),
+            ]
+            for i, label in enumerate(right_labels):
+                if i < self._right_tabs.count():
+                    self._right_tabs.setTabText(i, label)
         self._gb_flow.setTitle(tr("group.workflow"))
         self._sec_flow_presets.setText(tr("workflow.section"))
         self._workflow_name.setPlaceholderText(tr("workflow.name_ph"))
@@ -1439,7 +1559,10 @@ class MainWindow(QMainWindow):
         self._current_bg_name = name
 
         is_custom = isinstance(bg, CustomCodeBackground)
-        self._code_group.setVisible(is_custom)
+        if hasattr(self, "_left_tabs") and hasattr(self, "_code_tab_index"):
+            self._left_tabs.setTabEnabled(self._code_tab_index, is_custom)
+            if is_custom:
+                self._left_tabs.setCurrentIndex(self._code_tab_index)
         if is_custom:
             self._sync_custom_code_panel_from_preset()
         self._update_timeline_visibility()
@@ -1492,7 +1615,9 @@ class MainWindow(QMainWindow):
             return
         pid = self._preset_combo.itemData(idx)
         self._preset_del_btn.setEnabled(pid is not None)
-        vis = self._code_group.isVisible()
+        vis = isinstance(
+            self._bg_instances.get(_CUSTOM_BG_NAME), CustomCodeBackground
+        ) and self._current_bg_name == _CUSTOM_BG_NAME
         if pid is None:
             self._preset_name.clear()
             self._settings.setValue("custom_bg_last_id", "")
@@ -1690,7 +1815,7 @@ class MainWindow(QMainWindow):
             bg._last_code = None
 
     def _on_custom_code_text_changed(self) -> None:
-        if not self._code_group.isVisible():
+        if self._current_bg_name != _CUSTOM_BG_NAME:
             return
         self._code_apply_timer.start()
 

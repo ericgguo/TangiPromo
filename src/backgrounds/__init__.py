@@ -1,4 +1,4 @@
-from .gradient import MeshGradientBackground
+from .aurora_flow import AuroraFlowBackground
 from .particles import ParticleConstellationBackground
 from .aurora import AuroraBackground
 from .neon import NeonGlowBackground
@@ -7,9 +7,9 @@ from .waves import AbstractWavesBackground
 from .custom import CustomCodeBackground
 
 ALL_BACKGROUNDS: list = [
-    MeshGradientBackground,
-    AbstractWavesBackground,
+    AuroraFlowBackground,
     AuroraBackground,
+    AbstractWavesBackground,
     NeonGlowBackground,
     GeometricBackground,
     ParticleConstellationBackground,

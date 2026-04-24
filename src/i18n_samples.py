@@ -1,75 +1,72 @@
 """自定义背景默认示例代码（中英注释），供 i18n 引用。"""
 from __future__ import annotations
 
-# 共享画面逻辑：5 个柔和的流动色球 + 顶层微噪点网格，营造"现代简约"渐变流光感。
-# 配色遵循现代 UI（indigo / violet / teal / amber），无高饱和纯色，
-# 避免"花哨"但保留动感。
+# 共享画面逻辑：NumPy 加速的极光流动背景，
+# 两套优雅配色（深翠绿 ↔ 幻彩紫青）每 6s 交替交融。
 
 _SHARED_BODY = """\
-# Soft orbs (fx, fy, phase_x, phase_y, R, G, B)
-orbs = [
-    (0.22, 0.28, 0.00, 0.00, 124, 108, 255),   # indigo
-    (0.31, 0.19, 1.57, 2.09, 168, 132, 255),   # violet
-    (0.17, 0.35, 3.14, 1.05,  90, 210, 220),   # teal
-    (0.27, 0.24, 5.24, 3.67, 255, 176, 120),   # amber
-    (0.20, 0.32, 2.62, 4.71, 255, 128, 168),   # rose
-]
+import numpy as np
+from PySide6.QtGui import QImage
 
-# Deep neutral base — avoid pure black for softer feel.
-painter.fillRect(0, 0, width, height, QColor(11, 11, 16))
+# --- 1. 时间与周期控制 ---
+# 周期改为 6.0s
+period = 6.0
+# 使用 cos 映射到 0.0 - 1.0
+# 这样在 t=0, 6, 12... 时 alpha 为 0
+alpha = 0.5 * (1 + np.cos(2 * np.pi * t / period + np.pi))
 
-# Additive orbs create a calm, modern color wash.
-painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-radius = max(width, height) * 0.78
+# --- 2. 物理波动计算 (微调频率使波动更柔和) ---
+time_factor = 1.5  # 稍微放慢波动速度，增加优雅感
+active_t = t * time_factor
 
-for fx, fy, px, py, r, g, b in orbs:
-    cx = (math.cos(t * fx + px) * 0.32 + 0.5) * width
-    cy = (math.sin(t * fy + py) * 0.32 + 0.5) * height
-    grad = QRadialGradient(QPointF(cx, cy), radius)
-    grad.setColorAt(0.0, QColor(r, g, b, 150))
-    grad.setColorAt(0.45, QColor(r // 2, g // 2, b // 2, 55))
-    grad.setColorAt(1.0, QColor(r, g, b, 0))
-    painter.fillRect(0, 0, width, height, grad)
+x = np.linspace(0, 1, width)
+y = np.linspace(0, 1, height)
+xx, yy = np.meshgrid(x, y)
 
-painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+# 增加一些非线性扰动，模拟极光的流体感
+waveBase = np.sin(xx * 2.0 + active_t) * 0.5 + np.cos(yy * 2.5 - active_t * 0.7)
+waveDiag = np.sin((xx + yy) * 3.5 + active_t * 1.2)
+waveDetail = np.sin(xx * 15.0 - yy * 12.0 + active_t * 2.0) * 0.2
+combined = waveBase + waveDiag + waveDetail
 
-# Subtle top-down vignette to ground the composition.
-vignette = QLinearGradient(0, 0, 0, height)
-vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
-vignette.setColorAt(1.0, QColor(0, 0, 0, 90))
-painter.fillRect(0, 0, width, height, vignette)
+# 重新归一化 Mask，使其对比度更柔和
+mask = (combined + 3.0) / 6.0
+mask = np.clip(mask, 0, 1)
+
+# --- 3. 颜色定义 (优雅极光色系) ---
+
+# 方案 A：深邃翠绿 (Deep Emerald / Aurora Green)
+# Dark: (5, 15, 25) | Light: (40, 200, 150)
+r_a = 5 * (1 - mask) + 40 * mask
+g_a = 15 * (1 - mask) + 200 * mask
+b_a = 25 * (1 - mask) + 150 * mask
+
+# 方案 B：幻彩紫青 (Ethereal Purple / Cyan)
+# Dark: (10, 10, 40) | Light: (130, 100, 255)
+r_b = 10 * (1 - mask) + 130 * mask
+g_b = 10 * (1 - mask) + 100 * mask
+b_b = 40 * (1 - mask) + 255 * mask
+
+# --- 4. 颜色合成与增强 ---
+# 在 A 和 B 之间插值
+r = r_a * (1 - alpha) + r_b * alpha
+g = g_a * (1 - alpha) + g_b * alpha
+b = b_a * (1 - alpha) + b_b * alpha
+
+# 进阶技巧：在 alpha 中间阶段注入一点"高光白"模拟极光最亮的中心
+glimmer = np.sin(np.pi * alpha) * (mask ** 4) * 50
+r = np.clip(r + glimmer, 0, 255)
+g = np.clip(g + glimmer * 1.2, 0, 255)
+b = np.clip(b + glimmer * 1.1, 0, 255)
+
+# --- 5. 渲染输出 ---
+rgb = np.dstack((r, g, b)).astype(np.uint8)
+rgb = np.ascontiguousarray(rgb)
+
+h, w, _ = rgb.shape
+qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+painter.drawImage(0, 0, qimg)
 """
 
-CODE_SAMPLE_ZH = """\
-# 自定义背景示例 —— 现代柔和流光（Indigo · Violet · Teal · Amber · Rose）
-#
-# 可用变量：painter, width, height, t（秒）
-# Qt 类：QColor, QRadialGradient, QLinearGradient, QPainterPath,
-#        QPen, QBrush, QPointF, QRectF, Qt, QPainter, QFont
-# 可选参数：Vortex_Strength, Color_Drift, Noise_Scale,
-#           Aspect_Lock, Vignette_Weight 等（顶部直接赋值即可覆盖）
-# 辅助函数：vortex_offset, fbm2, perlin2, hsv_drift …
-# numpy：np（若已安装）
-#
-# 用法提示：
-#   vx, vy = vortex_offset(px, py, cx, cy, Vortex_Strength, t)
-#   grad = QRadialGradient(QPointF(px + vx, py + vy), radius)
-
-""" + _SHARED_BODY
-
-CODE_SAMPLE_EN = """\
-# Custom background — modern soft flow (Indigo · Violet · Teal · Amber · Rose)
-#
-# Variables: painter, width, height, t (seconds)
-# Qt: QColor, QRadialGradient, QLinearGradient, QPainterPath,
-#     QPen, QBrush, QPointF, QRectF, Qt, QPainter, QFont
-# Optional params: Vortex_Strength, Color_Drift, Noise_Scale,
-#                  Aspect_Lock, Vignette_Weight, … (override at top of file)
-# Helpers: vortex_offset, fbm2, perlin2, hsv_drift, …
-# numpy: np when installed
-#
-# Usage:
-#   vx, vy = vortex_offset(px, py, cx, cy, Vortex_Strength, t)
-#   grad = QRadialGradient(QPointF(px + vx, py + vy), radius)
-
-""" + _SHARED_BODY
+CODE_SAMPLE_ZH = _SHARED_BODY
+CODE_SAMPLE_EN = _SHARED_BODY

@@ -7,7 +7,7 @@ from .base import Background
 class AuroraBackground(Background):
     """Aurora borealis — layered sine wave bands with gradient fills."""
 
-    name = "极光"
+    name = "极光波浪"
 
     BANDS = [
         # (base_y_frac, amplitude, freq, phase_offset, color1, color2, alpha)

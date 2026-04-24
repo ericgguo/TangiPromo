@@ -297,6 +297,22 @@ QToolTip {
     font-size: 12px;
 }
 
+/* ── TabWidget (used by side panels) ───────────────────────────────────── */
+QTabWidget::pane {
+    border: none;
+    background: #141418;
+}
+QTabBar::tab {
+    background: transparent;
+    color: #8a8a93;
+    padding: 9px 14px;
+    border: none;
+    border-bottom: 2px solid transparent;
+}
+QTabBar::tab:selected { color: #f4f4f6; border-bottom: 2px solid #7c6bff; }
+QTabBar::tab:hover:!selected { color: #d4d4dc; }
+QTabBar::tab:disabled { color: #3f3f48; }
+
 /* ── MessageBox / Dialog buttons look consistent ───────────────────────── */
 QMessageBox { background-color: #1c1c22; }
 QMessageBox QLabel { color: #f4f4f6; }
