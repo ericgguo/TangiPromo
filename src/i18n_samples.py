@@ -1,83 +1,75 @@
 """自定义背景默认示例代码（中英注释），供 i18n 引用。"""
 from __future__ import annotations
 
-CODE_SAMPLE_ZH = """\
-# 自定义背景代码示例 —— 网格渐变风格（与「网格渐变流动」预设逻辑相同）
-#
-# 【可用变量】painter, width, height, t（秒）
-# 【Qt 类】QColor, QRadialGradient, QLinearGradient, QPainterPath,
-#          QPen, QBrush, QPointF, QRectF, Qt, QPainter, QFont
-# 【可选默认参数】Vortex_Strength=0, Color_Drift=0.05, Noise_Scale=1,
-#               Aspect_Lock=True, Vignette_Weight=0 等
-#               → 在代码顶部直接赋值即可覆盖，例如：Vortex_Strength = 0.5
-# 【辅助函数】vortex_offset(px,py,cx,cy,strength,t) → (dx,dy) 偏移量
-#            fbm2(x,y), perlin2(x,y), hsv_drift(color,t,drift) 等
-# 【numpy】np（已安装时可用）
-#
-# 注意：vortex_offset 返回的是「偏移量」(dx,dy)，用法：
-#   vx, vy = vortex_offset(pos_x, pos_y, cx, cy, Vortex_Strength, t)
-#   grad = QRadialGradient(QPointF(pos_x + vx, pos_y + vy), radius)
+# 共享画面逻辑：5 个柔和的流动色球 + 顶层微噪点网格，营造"现代简约"渐变流光感。
+# 配色遵循现代 UI（indigo / violet / teal / amber），无高饱和纯色，
+# 避免"花哨"但保留动感。
 
+_SHARED_BODY = """\
+# Soft orbs (fx, fy, phase_x, phase_y, R, G, B)
 orbs = [
-    (0.31, 0.37, 0.00, 0.00, 120,  80, 220),
-    (0.47, 0.29, 1.57, 2.09, 220,  60, 180),
-    (0.38, 0.53, 3.14, 1.05,  60, 200, 220),
-    (0.23, 0.41, 5.24, 3.67, 220, 160,  60),
-    (0.55, 0.19, 2.62, 4.71,  60, 220, 120),
+    (0.22, 0.28, 0.00, 0.00, 124, 108, 255),   # indigo
+    (0.31, 0.19, 1.57, 2.09, 168, 132, 255),   # violet
+    (0.17, 0.35, 3.14, 1.05,  90, 210, 220),   # teal
+    (0.27, 0.24, 5.24, 3.67, 255, 176, 120),   # amber
+    (0.20, 0.32, 2.62, 4.71, 255, 128, 168),   # rose
 ]
 
-painter.fillRect(0, 0, width, height, QColor(10, 8, 30))
+# Deep neutral base — avoid pure black for softer feel.
+painter.fillRect(0, 0, width, height, QColor(11, 11, 16))
+
+# Additive orbs create a calm, modern color wash.
 painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-radius = max(width, height) * 0.85
+radius = max(width, height) * 0.78
 
 for fx, fy, px, py, r, g, b in orbs:
-    cx = (math.cos(t * fx + px) * 0.38 + 0.5) * width
-    cy = (math.sin(t * fy + py) * 0.38 + 0.5) * height
+    cx = (math.cos(t * fx + px) * 0.32 + 0.5) * width
+    cy = (math.sin(t * fy + py) * 0.32 + 0.5) * height
     grad = QRadialGradient(QPointF(cx, cy), radius)
-    grad.setColorAt(0.0, QColor(r, g, b, 200))
-    grad.setColorAt(0.5, QColor(r // 2, g // 2, b // 2, 80))
+    grad.setColorAt(0.0, QColor(r, g, b, 150))
+    grad.setColorAt(0.45, QColor(r // 2, g // 2, b // 2, 55))
     grad.setColorAt(1.0, QColor(r, g, b, 0))
     painter.fillRect(0, 0, width, height, grad)
 
 painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+# Subtle top-down vignette to ground the composition.
+vignette = QLinearGradient(0, 0, 0, height)
+vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
+vignette.setColorAt(1.0, QColor(0, 0, 0, 90))
+painter.fillRect(0, 0, width, height, vignette)
 """
 
+CODE_SAMPLE_ZH = """\
+# 自定义背景示例 —— 现代柔和流光（Indigo · Violet · Teal · Amber · Rose）
+#
+# 可用变量：painter, width, height, t（秒）
+# Qt 类：QColor, QRadialGradient, QLinearGradient, QPainterPath,
+#        QPen, QBrush, QPointF, QRectF, Qt, QPainter, QFont
+# 可选参数：Vortex_Strength, Color_Drift, Noise_Scale,
+#           Aspect_Lock, Vignette_Weight 等（顶部直接赋值即可覆盖）
+# 辅助函数：vortex_offset, fbm2, perlin2, hsv_drift …
+# numpy：np（若已安装）
+#
+# 用法提示：
+#   vx, vy = vortex_offset(px, py, cx, cy, Vortex_Strength, t)
+#   grad = QRadialGradient(QPointF(px + vx, py + vy), radius)
+
+""" + _SHARED_BODY
+
 CODE_SAMPLE_EN = """\
-# Custom background sample — mesh gradient (same idea as the "Mesh gradient" preset)
+# Custom background — modern soft flow (Indigo · Violet · Teal · Amber · Rose)
 #
 # Variables: painter, width, height, t (seconds)
 # Qt: QColor, QRadialGradient, QLinearGradient, QPainterPath,
 #     QPen, QBrush, QPointF, QRectF, Qt, QPainter, QFont
 # Optional params: Vortex_Strength, Color_Drift, Noise_Scale,
-#                  Aspect_Lock, Vignette_Weight, … (override at top of script)
-# Helpers: vortex_offset(px,py,cx,cy,strength,t) -> (dx,dy);
-#          fbm2, perlin2, hsv_drift, …
+#                  Aspect_Lock, Vignette_Weight, … (override at top of file)
+# Helpers: vortex_offset, fbm2, perlin2, hsv_drift, …
 # numpy: np when installed
 #
-# vortex_offset returns offsets (dx, dy), e.g.:
-#   vx, vy = vortex_offset(pos_x, pos_y, cx, cy, Vortex_Strength, t)
-#   grad = QRadialGradient(QPointF(pos_x + vx, pos_y + vy), radius)
+# Usage:
+#   vx, vy = vortex_offset(px, py, cx, cy, Vortex_Strength, t)
+#   grad = QRadialGradient(QPointF(px + vx, py + vy), radius)
 
-orbs = [
-    (0.31, 0.37, 0.00, 0.00, 120,  80, 220),
-    (0.47, 0.29, 1.57, 2.09, 220,  60, 180),
-    (0.38, 0.53, 3.14, 1.05,  60, 200, 220),
-    (0.23, 0.41, 5.24, 3.67, 220, 160,  60),
-    (0.55, 0.19, 2.62, 4.71,  60, 220, 120),
-]
-
-painter.fillRect(0, 0, width, height, QColor(10, 8, 30))
-painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-radius = max(width, height) * 0.85
-
-for fx, fy, px, py, r, g, b in orbs:
-    cx = (math.cos(t * fx + px) * 0.38 + 0.5) * width
-    cy = (math.sin(t * fy + py) * 0.38 + 0.5) * height
-    grad = QRadialGradient(QPointF(cx, cy), radius)
-    grad.setColorAt(0.0, QColor(r, g, b, 200))
-    grad.setColorAt(0.5, QColor(r // 2, g // 2, b // 2, 80))
-    grad.setColorAt(1.0, QColor(r, g, b, 0))
-    painter.fillRect(0, 0, width, height, grad)
-
-painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-"""
+""" + _SHARED_BODY

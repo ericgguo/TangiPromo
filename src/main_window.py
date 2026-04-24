@@ -49,17 +49,23 @@ _CUSTOM_BG_NAME = CustomCodeBackground().name
 def _group(title: str) -> tuple[QGroupBox, QVBoxLayout]:
     gb = QGroupBox(title)
     lay = QVBoxLayout(gb)
-    lay.setContentsMargins(10, 14, 10, 10)
+    lay.setContentsMargins(12, 16, 12, 12)
     lay.setSpacing(8)
     return gb, lay
 
 
+_COLOR_SWATCH_QSS = (
+    "QPushButton {{ background:{c}; border-radius:6px; "
+    "border:1px solid rgba(255,255,255,0.12); }}"
+    "QPushButton:hover {{ border:1px solid rgba(255,255,255,0.28); }}"
+)
+
+
 def _color_btn(color: QColor) -> QPushButton:
     btn = QPushButton()
-    btn.setFixedSize(32, 24)
-    btn.setStyleSheet(
-        f"background:{color.name()};border-radius:5px;border:1px solid #48484a;"
-    )
+    btn.setFixedSize(34, 24)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(_COLOR_SWATCH_QSS.format(c=color.name()))
     return btn
 
 
@@ -88,9 +94,9 @@ class SectionLabel(QLabel):
     def __init__(self, text: str):
         super().__init__(text)
         self.setStyleSheet(
-            "color:#8e8e93;font-size:10px;font-weight:600;"
-            "text-transform:uppercase;letter-spacing:0.7px;"
-            "padding:8px 0 4px 0;background:transparent;border:none;"
+            "color:#8a8a93;font-size:10px;font-weight:600;"
+            "text-transform:uppercase;letter-spacing:0.9px;"
+            "padding:10px 0 4px 2px;background:transparent;border:none;"
         )
 
 
@@ -100,13 +106,14 @@ def _scroll_panel() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     area = QScrollArea()
     area.setWidgetResizable(True)
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    area.setMinimumWidth(232)
-    area.setMaximumWidth(312)
+    area.setMinimumWidth(248)
+    area.setMaximumWidth(324)
+    area.setFrameShape(QScrollArea.Shape.NoFrame)
 
     inner = QWidget()
     lay = QVBoxLayout(inner)
-    lay.setContentsMargins(12, 14, 12, 14)
-    lay.setSpacing(6)
+    lay.setContentsMargins(14, 16, 14, 16)
+    lay.setSpacing(10)
     area.setWidget(inner)
     return area, inner, lay
 
@@ -192,11 +199,14 @@ class MainWindow(QMainWindow):
 
         # Status bar
         sb = QStatusBar()
+        sb.setSizeGripEnabled(False)
         sb.setStyleSheet(
-            "background:#141416;color:#636366;font-size:12px;"
-            "border-top:1px solid rgba(255,255,255,0.06);"
+            "QStatusBar{background:#0b0b0d;color:#8a8a93;font-size:11.5px;"
+            "border-top:1px solid rgba(255,255,255,0.05);padding:2px 12px;}"
+            "QStatusBar::item{border:none;}"
         )
         self._status_lbl = QLabel(tr("status.ready"))
+        self._status_lbl.setStyleSheet("color:#8a8a93;background:transparent;")
         sb.addWidget(self._status_lbl)
         self.setStatusBar(sb)
 
@@ -208,21 +218,33 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._canvas, 1)
 
         self._timeline_bar = QWidget()
+        self._timeline_bar.setObjectName("timelineBar")
+        self._timeline_bar.setStyleSheet(
+            "#timelineBar{background:#141418;"
+            "border-top:1px solid rgba(255,255,255,0.05);}"
+        )
         bar_lay = QVBoxLayout(self._timeline_bar)
-        bar_lay.setContentsMargins(8, 4, 8, 8)
-        bar_lay.setSpacing(4)
+        bar_lay.setContentsMargins(14, 8, 14, 10)
+        bar_lay.setSpacing(6)
         self._timeline_slider = _slider(0, 10_000, 0)
         self._timeline_slider.setToolTip(tr("timeline.tip"))
         self._timeline_time_lbl = QLabel("00:00.00 / 00:10.00")
+        self._timeline_time_lbl.setStyleSheet(
+            "color:#8a8a93;font-size:11px;"
+            "font-family:'JetBrains Mono','SF Mono','Menlo',monospace;"
+        )
         self._timeline_time_lbl.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         ctrls = QWidget()
         ctrls_lay = QHBoxLayout(ctrls)
         ctrls_lay.setContentsMargins(0, 0, 0, 0)
+        ctrls_lay.setSpacing(8)
         self._tl_play_btn = QPushButton(tr("timeline.play_pause"))
+        self._tl_play_btn.setObjectName("primaryBtn")
         self._tl_add_bp_btn = QPushButton(tr("timeline.add_bp"))
         self._tl_del_bp_btn = QPushButton(tr("timeline.del_bp"))
+        self._tl_del_bp_btn.setObjectName("ghostBtn")
         self._tl_bp_combo = QComboBox()
         self._tl_bp_combo.setMinimumWidth(200)
         self._tl_bp_combo.addItem(tr("timeline.bp_none"), None)
@@ -342,8 +364,9 @@ class MainWindow(QMainWindow):
 
         self._code_err_lbl = QLabel()
         self._code_err_lbl.setStyleSheet(
-            "color:#ff453a;font-size:11px;background:transparent;border:none;"
-            "padding:4px;"
+            "color:#ff8086;font-size:11.5px;background:rgba(255,90,95,0.08);"
+            "border:1px solid rgba(255,90,95,0.25);border-radius:6px;"
+            "padding:6px 8px;"
         )
         self._code_err_lbl.setWordWrap(True)
         self._code_err_lbl.hide()
@@ -433,7 +456,8 @@ class MainWindow(QMainWindow):
         self._clear_content_btn = QPushButton(tr("screen.clear"))
         self._content_lbl = QLabel(tr("screen.none"))
         self._content_lbl.setStyleSheet(
-            "color:#636366;font-size:11px;background:transparent;border:none;"
+            "color:#8a8a93;font-size:11.5px;background:transparent;border:none;"
+            "padding-top:2px;"
         )
         self._content_lbl.setWordWrap(True)
 
@@ -446,7 +470,7 @@ class MainWindow(QMainWindow):
         self._gb_wm, vl_wm = _group(tr("group.wm"))
         self._wm_hint = QLabel(tr("wm.hint"))
         self._wm_hint.setWordWrap(True)
-        self._wm_hint.setStyleSheet("color:#8e8e93;font-size:11px;")
+        self._wm_hint.setStyleSheet("color:#8a8a93;font-size:11.5px;")
         vl_wm.addWidget(self._wm_hint)
         self._wm_rows_host = QWidget()
         self._wm_rows_layout = QVBoxLayout(self._wm_rows_host)
@@ -486,7 +510,10 @@ class MainWindow(QMainWindow):
         self._txt_stack = QStackedWidget()
         self._txt_empty = QLabel(tr("text.pick_layer"))
         self._txt_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._txt_empty.setStyleSheet("color:#636366;background:transparent;border:none;")
+        self._txt_empty.setStyleSheet(
+            "color:#8a8a93;background:transparent;border:none;"
+            "padding:18px;font-size:12px;"
+        )
         self._txt_stack.addWidget(self._txt_empty)   # index 0
 
         self._txt_editor = self._build_text_editor()
@@ -519,7 +546,7 @@ class MainWindow(QMainWindow):
         self._fx_region_guide_cb = QCheckBox(tr("effects.region_guide"))
         self._fx_help_lbl = QLabel(tr("effects.help"))
         self._fx_help_lbl.setWordWrap(True)
-        self._fx_help_lbl.setStyleSheet("color:#8e8e93;font-size:11px;")
+        self._fx_help_lbl.setStyleSheet("color:#8a8a93;font-size:11.5px;")
         self._fx_code_edit = QTextEdit()
         self._fx_code_edit.setMinimumHeight(120)
         self._fx_code_edit.setPlaceholderText(tr("effects.code_ph"))
@@ -570,7 +597,7 @@ class MainWindow(QMainWindow):
         self._full_import_cb.setToolTip(tr("export.full_vid_tip"))
         vl_vid.addRow("", self._full_import_cb)
         self._vid_src_lbl = QLabel("")
-        self._vid_src_lbl.setStyleSheet("color:#8e8e93;font-size:11px;")
+        self._vid_src_lbl.setStyleSheet("color:#8a8a93;font-size:11.5px;")
         self._vid_src_lbl.setWordWrap(True)
         vl_vid.addRow("", self._vid_src_lbl)
         self._vid_options.hide()
@@ -1007,17 +1034,25 @@ class MainWindow(QMainWindow):
             sub = QGroupBox(st.title)
             sub.setToolTip(st.image_path)
             sub.setStyleSheet(
-                "QGroupBox { font-size: 12px; color: #a1a1a6; padding-top: 8px; }"
+                "QGroupBox{font-size:11px;color:#b8b8c0;"
+                "background-color:#17171c;"
+                "border:1px solid rgba(255,255,255,0.05);"
+                "border-radius:10px;padding:12px 10px 8px 10px;margin-top:10px;"
+                "text-transform:none;letter-spacing:0.3px;}"
+                "QGroupBox::title{left:10px;padding:0 4px;}"
             )
             sf = QFormLayout(sub)
             sf.setContentsMargins(6, 10, 6, 6)
+            sf.setSpacing(6)
             cb = QCheckBox(tr("wm.show"))
             cb.setChecked(st.enabled)
             cbtn = QPushButton()
-            cbtn.setFixedSize(44, 26)
+            cbtn.setFixedSize(44, 24)
+            cbtn.setCursor(Qt.CursorShape.PointingHandCursor)
             cbtn.setStyleSheet(
-                f"background:{st.color.name(QColor.NameFormat.HexArgb)};"
-                "border-radius:6px;border:1px solid #48484a;"
+                _COLOR_SWATCH_QSS.format(
+                    c=st.color.name(QColor.NameFormat.HexArgb)
+                )
             )
             sx = QDoubleSpinBox()
             sx.setRange(0, 100)
@@ -1125,8 +1160,7 @@ class MainWindow(QMainWindow):
             return
         st.color = c
         self._wm_color_btns[index].setStyleSheet(
-            f"background:{c.name(QColor.NameFormat.HexArgb)};"
-            "border-radius:6px;border:1px solid #48484a;"
+            _COLOR_SWATCH_QSS.format(c=c.name(QColor.NameFormat.HexArgb))
         )
         self._apply_watermarks_from_ui()
 
@@ -1938,7 +1972,7 @@ class MainWindow(QMainWindow):
         }
         self._te_align.setCurrentIndex(ALIGN_MAP.get(layer.align, 0))
         self._te_color.setStyleSheet(
-            f"background:{layer.color.name()};border-radius:5px;border:1px solid #48484a;"
+            _COLOR_SWATCH_QSS.format(c=layer.color.name())
         )
         self._block_editor(False)
 
@@ -1985,7 +2019,7 @@ class MainWindow(QMainWindow):
         if color.isValid():
             layer.color = color
             self._te_color.setStyleSheet(
-                f"background:{color.name()};border-radius:5px;border:1px solid #48484a;"
+                _COLOR_SWATCH_QSS.format(c=color.name())
             )
 
     # ------------------------------------------------------------------
