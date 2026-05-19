@@ -352,7 +352,8 @@ QProgressBar::chunk {
 """
 
 
-def main():
+def run_gui() -> None:
+    """启动 GUI 窗口（可被 CLI 的 gui 子命令调用）。"""
     app = QApplication(sys.argv)
     app.setApplicationName("TangiPromo")
     app.setApplicationDisplayName("TangiPromo")
@@ -388,6 +389,15 @@ def main():
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+
+def main() -> None:
+    """应用入口：有参数时走 CLI（含 --help），否则启动 GUI。"""
+    if len(sys.argv) > 1:
+        from src.cli import run_cli
+        run_cli()
+        return
+    run_gui()
 
 
 if __name__ == "__main__":

@@ -81,6 +81,99 @@ python main.py
 
 Use the **same** interpreter for `pip` and `python` so imports resolve. Dependencies: see `requirements.txt` (PySide6, NumPy, Pillow, OpenCV, etc.).
 
+### CLI / Headless mode (for local agents)
+
+TangiPromo ships a **full headless CLI** so that local AI agents (Hermes, OpenClaw, Cursor Agent, Codex, Claude Code or any tool-use capable model) can drive the entire creative pipeline without touching the GUI.
+
+```bash
+python main.py <command> [options]
+# or after pip install -e .
+tangipromo <command> [options]
+```
+
+**Discovery commands** — always run these first so the agent knows the exact names:
+
+```bash
+python main.py list-backgrounds       # prints internal name for --background
+python main.py list-iphones           # prints all models + theme IDs
+python main.py list-resolutions       # prints all resolution presets
+```
+
+**Export a static image:**
+
+```bash
+python main.py export-image \
+  --background "霓虹光效" \
+  --ratio 9:16 \
+  --no-iphone \
+  --text "My App" --text-color "#ff7c6bff" --text-size 48 --text-bold \
+  --resolution 1080x1920 \
+  out.png
+```
+
+**Export an MP4 video:**
+
+```bash
+python main.py export-video \
+  --background "星空粒子" \
+  --ratio 9:16 \
+  --iphone "iPhone 17 Pro Max" --iphone-theme deep_blue \
+  --screen /path/to/screen.mp4 \
+  --duration 8 --fps 30 \
+  out.mp4
+```
+
+**Save / load workflow presets** (format is 100% compatible with GUI-saved presets):
+
+```bash
+# Save current CLI config as a workflow JSON
+python main.py save-workflow \
+  --background "极光" --ratio 9:16 --no-iphone \
+  --name "my_preset" workflow.json
+
+# Load a GUI-saved (or CLI-saved) workflow, then export
+python main.py export-image --workflow workflow.json out.png
+python main.py export-video --workflow workflow.json out.mp4
+```
+
+**Full parameter reference:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `--background NAME` | Background internal name (from `list-backgrounds`) |
+| `--bg-speed 0-200` | Animation speed % (default 100) |
+| `--bg-code PATH\|CODE` | Custom background Python code (file path or inline string) |
+| `--ratio 16:9\|9:16\|...` | Output aspect ratio |
+| `--iphone "MODEL"` | Device frame model (from `list-iphones`) |
+| `--iphone-theme ID` | Theme ID (from `list-iphones`) |
+| `--iphone-scale 0-100` | Device scale % |
+| `--iphone-x / --iphone-y` | Device position % (50=center) |
+| `--no-iphone` | Hide device frame |
+| `--screen PATH` | Screen image or video (auto-detected) |
+| `--text TEXT` | Text layer (repeatable for multiple layers) |
+| `--text-y 0-1` | Y position per layer (repeatable) |
+| `--text-x 0-1` | X position per layer (repeatable, default 0.5) |
+| `--text-font FAMILY` | Font family per layer (repeatable) |
+| `--text-size PT` | Font size pt per layer (repeatable) |
+| `--text-color #HEX` | Text color per layer (repeatable) |
+| `--text-bold` | Bold for all `--text` layers |
+| `--text-no-shadow` | Disable shadow for all `--text` layers |
+| `--watermark PATH` | Watermark PNG path |
+| `--watermark-x/y/width` | Watermark position & size % |
+| `--watermark-color #ARGB` | Watermark tint color |
+| `--effect-code PATH\|CODE` | Post-effect Python code (file or inline) |
+| `--effect-off` | Disable effect even if workflow has it enabled |
+| `--region-guide` | Enable effect region crosshair overlay |
+| `--breakpoints T1,T2,...` | Timeline breakpoints in seconds |
+| `--resolution PRESET\|WxH` | Export resolution (e.g. `1080p`, `4k`, `1920x1080`) |
+| `--time SECONDS` | Snapshot time for image export |
+| `--fps FPS` | Video frame rate (default 30) |
+| `--duration SECONDS` | Video duration |
+| `--full-import-video` | Extend duration to cover full imported video |
+| `--workflow PATH` | Load a workflow JSON as base config |
+
+**For Hermes / OpenClaw agents** — a `SKILL.md` file is provided in this repo with step-by-step instructions, all parameter enums, and copy-pasteable examples. Read it before invoking the CLI.
+
 ---
 
 <a id="中文"></a>
@@ -154,3 +247,60 @@ python main.py
 ```
 
 请保证 **`pip` 与 `python` 指向同一解释器**，以免找不到已安装的包。依赖列表见 `requirements.txt`（PySide6、NumPy、Pillow、OpenCV 等）。
+
+### CLI / 无头模式（面向 Local Agent）
+
+TangiPromo 专门为本地 AI Agent（Hermes、OpenClaw、Cursor Agent、Codex、Claude Code 及其他支持 tool-use 的模型）提供了完整的 **命令行接口**，无需打开 GUI 即可驱动完整的宣发素材生成流程。
+
+```bash
+python main.py <命令> [选项]
+# 安装后也可直接使用
+tangipromo <命令> [选项]
+```
+
+**发现命令** — Agent 调用前应先执行这几条，获取精确的内部名称：
+
+```bash
+python main.py list-backgrounds       # 输出所有背景的内部名称（--background 使用）
+python main.py list-iphones           # 输出所有设备型号与主题 ID
+python main.py list-resolutions       # 输出所有分辨率预设
+```
+
+**导出静态图片：**
+
+```bash
+python main.py export-image \
+  --background "霓虹光效" \
+  --ratio 9:16 \
+  --no-iphone \
+  --text "我的App" --text-color "#ff7c6bff" --text-size 48 --text-bold \
+  --resolution 1080x1920 \
+  out.png
+```
+
+**导出 MP4 视频：**
+
+```bash
+python main.py export-video \
+  --background "星空粒子" \
+  --ratio 9:16 \
+  --iphone "iPhone 17 Pro Max" --iphone-theme deep_blue \
+  --screen /path/to/screen.mp4 \
+  --duration 8 --fps 30 \
+  out.mp4
+```
+
+**保存 / 加载 workflow 预设**（格式与 GUI 完全兼容）：
+
+```bash
+# 将当前 CLI 配置保存为 workflow JSON
+python main.py save-workflow \
+  --background "极光" --ratio 9:16 --no-iphone \
+  --name "my_preset" workflow.json
+
+# 加载 workflow 后导出（支持 GUI 或 CLI 保存的预设）
+python main.py export-image --workflow workflow.json out.png
+python main.py export-video --workflow workflow.json out.mp4
+```
+
+完整参数说明及 Agent 操作指南见仓库根目录的 **`SKILL.md`**。

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "tangipromo"
+version = "0.1.0"
+description = "TangiPromo — 宣发素材生成器"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.6.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "opencv-python>=4.8.0",
+]
+
+[project.scripts]
+tangipromo = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
