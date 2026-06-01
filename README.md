@@ -123,17 +123,13 @@ python main.py export-video \
   out.mp4
 ```
 
-**Save / load workflow presets** (format is 100% compatible with GUI-saved presets):
+**Workflow presets** (CLI shares the same library as the GUI):
 
 ```bash
-# Save current CLI config as a workflow JSON
-python main.py save-workflow \
-  --background "极光" --ratio 9:16 --no-iphone \
-  --name "my_preset" workflow.json
-
-# Load a GUI-saved (or CLI-saved) workflow, then export
-python main.py export-image --workflow workflow.json out.png
-python main.py export-video --workflow workflow.json out.mp4
+python main.py list-workflows
+python main.py save-workflow-preset --name "my_preset" --background "极光" --ratio 9:16
+python main.py export-video --workflow-preset "my_preset" --screen demo.mp4 out.mp4
+python main.py delete-workflow --name "my_preset"
 ```
 
 **Full parameter reference:**
@@ -170,7 +166,9 @@ python main.py export-video --workflow workflow.json out.mp4
 | `--fps FPS` | Video frame rate (default 30) |
 | `--duration SECONDS` | Video duration |
 | `--full-import-video` | Extend duration to cover full imported video |
-| `--workflow PATH` | Load a workflow JSON as base config |
+| `--workflow PATH` | Load workflow from JSON file |
+| `--workflow-preset NAME` | Load from shared preset library |
+| `--workflow-id UUID` | Load preset by id (`list-workflows --json`) |
 
 **For Hermes / OpenClaw agents** — a `SKILL.md` file is provided in this repo with step-by-step instructions, all parameter enums, and copy-pasteable examples. Read it before invoking the CLI.
 
@@ -290,17 +288,13 @@ python main.py export-video \
   out.mp4
 ```
 
-**保存 / 加载 workflow 预设**（格式与 GUI 完全兼容）：
+**Workflow 预设库**（CLI 与 GUI 共用）：
 
 ```bash
-# 将当前 CLI 配置保存为 workflow JSON
-python main.py save-workflow \
-  --background "极光" --ratio 9:16 --no-iphone \
-  --name "my_preset" workflow.json
-
-# 加载 workflow 后导出（支持 GUI 或 CLI 保存的预设）
-python main.py export-image --workflow workflow.json out.png
-python main.py export-video --workflow workflow.json out.mp4
+python main.py list-workflows
+python main.py save-workflow-preset --name "my_preset" --background "极光" --ratio 9:16
+python main.py export-video --workflow-preset "my_preset" --screen demo.mp4 out.mp4
+python main.py delete-workflow --name "my_preset"
 ```
 
 完整参数说明及 Agent 操作指南见仓库根目录的 **`SKILL.md`**。

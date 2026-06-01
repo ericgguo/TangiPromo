@@ -8,7 +8,12 @@ TangiPromo CLI — 命令行接口。
 命令:
     export-image      导出静态图片（PNG/JPEG）
     export-video      导出 MP4 视频
-    save-workflow     保存当前参数为 workflow JSON
+    save-workflow         保存当前参数为 workflow JSON 文件
+    save-workflow-preset  保存到 workflow 预设库（与 GUI 共用）
+    list-workflows        列出预设库中的 workflow
+    delete-workflow       从预设库删除 workflow
+    export-workflow       将预设库中的 workflow 导出为 JSON 文件
+    workflow-import       从 JSON 文件导入到预设库
     gui               启动 GUI（等同于不带参数运行 main.py）
     list-backgrounds  列出所有可用背景名称及内部名称
     list-resolutions  列出所有分辨率预设
@@ -34,6 +39,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -102,6 +108,18 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--workflow",
         metavar="PATH",
         help="加载 workflow JSON 文件（格式与 GUI「保存工作流」一致）",
+    )
+    parser.add_argument(
+        "--workflow-preset",
+        metavar="NAME",
+        default=None,
+        help="从预设库按名称加载 workflow（与 GUI 下拉框同名）",
+    )
+    parser.add_argument(
+        "--workflow-id",
+        metavar="UUID",
+        default=None,
+        help="从预设库按 id 加载 workflow（见 list-workflows --json）",
     )
     parser.add_argument(
         "--background", "-b",
@@ -312,9 +330,11 @@ def _apply_args_to_session(session, args: argparse.Namespace) -> tuple[int, int]
     将命令行参数应用到 PromoSession。
     返回 (width, height)。
     """
-    # 1. 先加载 workflow（作为基础配置）
-    if args.workflow:
-        missing = session.load_workflow(args.workflow)
+    # 1. 先加载 workflow（预设库和/或文件）
+    if args.workflow_preset or args.workflow_id or args.workflow:
+        from .workflow_cli import load_workflow_sources
+
+        missing = load_workflow_sources(session, args)
         if missing:
             for p in missing:
                 print(f"[警告] 文件不存在，已跳过: {p}", file=sys.stderr)
@@ -478,6 +498,116 @@ def cmd_list_iphones(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list_workflows(args: argparse.Namespace) -> int:
+    _init_headless_app()
+    from .workflow_cli import get_workflow_store, preset_to_jsonable
+    from .workflow_preset_store import workflow_presets_path
+
+    store = get_workflow_store()
+    path = workflow_presets_path()
+    if args.json:
+        data = {
+            "path": str(path),
+            "presets": [preset_to_jsonable(p) for p in store.presets],
+        }
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"Workflow 预设库: {path}")
+    if not store.presets:
+        print("  (空)")
+        return 0
+    for p in store.presets:
+        print(f"  {p.name!r}  id={p.id}")
+    return 0
+
+
+def cmd_save_workflow_preset(args: argparse.Namespace) -> int:
+    _init_headless_app()
+    from .session import PromoSession
+    from .workflow_cli import get_workflow_store
+    from .workflow_preset_store import workflow_presets_path
+
+    session = PromoSession()
+    try:
+        _apply_args_to_session(session, args)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"[错误] {e}", file=sys.stderr)
+        return 1
+
+    name = (args.name or "cli_workflow").strip()
+    if not name:
+        print("[错误] 需要 --name", file=sys.stderr)
+        return 1
+
+    store = get_workflow_store()
+    preset_id = args.preset_id.strip() if getattr(args, "preset_id", None) else None
+    pr = store.upsert(name, session.collect_payload(), preset_id=preset_id)
+    print(json.dumps({"ok": True, "id": pr.id, "name": pr.name, "path": str(workflow_presets_path())}))
+    return 0
+
+
+def cmd_delete_workflow(args: argparse.Namespace) -> int:
+    _init_headless_app()
+    from .workflow_cli import get_workflow_store, resolve_preset
+
+    store = get_workflow_store()
+    try:
+        pr = resolve_preset(store, name=args.name, preset_id=args.preset_id)
+    except ValueError as e:
+        print(f"[错误] {e}", file=sys.stderr)
+        return 1
+
+    if not store.delete(pr.id):
+        print(f"[错误] 删除失败: {pr.id}", file=sys.stderr)
+        return 1
+    print(json.dumps({"ok": True, "deleted": pr.name, "id": pr.id}))
+    return 0
+
+
+def cmd_export_workflow(args: argparse.Namespace) -> int:
+    _init_headless_app()
+    from .workflow_cli import get_workflow_store, resolve_preset
+
+    store = get_workflow_store()
+    try:
+        pr = resolve_preset(store, name=args.name, preset_id=args.preset_id)
+    except ValueError as e:
+        print(f"[错误] {e}", file=sys.stderr)
+        return 1
+
+    out = args.output
+    data = {"version": 1, "presets": [pr.to_dict()]}
+    Path(out).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(json.dumps({"ok": True, "name": pr.name, "id": pr.id, "output": out}))
+    return 0
+
+
+def cmd_workflow_import(args: argparse.Namespace) -> int:
+    _init_headless_app()
+    from .workflow_cli import get_workflow_store, payload_from_workflow_file
+    from .workflow_preset_store import workflow_presets_path
+
+    name = args.name.strip()
+    if not name:
+        print("[错误] 需要 --name", file=sys.stderr)
+        return 1
+    try:
+        payload = payload_from_workflow_file(args.input)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"[错误] {e}", file=sys.stderr)
+        return 1
+
+    store = get_workflow_store()
+    preset_id = args.preset_id.strip() if args.preset_id else None
+    pr = store.upsert(name, payload, preset_id=preset_id)
+    print(json.dumps({"ok": True, "id": pr.id, "name": pr.name, "path": str(workflow_presets_path())}))
+    return 0
+
+
 def cmd_save_workflow(args: argparse.Namespace) -> int:
     _init_headless_app()
     from .session import PromoSession
@@ -625,10 +755,75 @@ def run_cli() -> None:
         help="列出所有 iPhone 型号及对应主题 ID",
     )
 
+    # --- list-workflows ---
+    p_lw = subparsers.add_parser(
+        "list-workflows",
+        help="列出 workflow 预设库（与 GUI 共用）",
+    )
+    p_lw.add_argument(
+        "--json",
+        action="store_true",
+        help="输出 JSON（含 id，供 --workflow-id 使用）",
+    )
+
+    # --- save-workflow-preset ---
+    p_swp = subparsers.add_parser(
+        "save-workflow-preset",
+        help="将当前 CLI 参数保存到 workflow 预设库",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common_args(p_swp)
+    p_swp.add_argument(
+        "--name", "-n",
+        required=True,
+        metavar="NAME",
+        help="预设名称（与 GUI 中显示一致）",
+    )
+    p_swp.add_argument(
+        "--preset-id",
+        default=None,
+        metavar="UUID",
+        help="更新已有预设的 id（省略则新建或按名称覆盖同名项需先 delete）",
+    )
+
+    # --- delete-workflow ---
+    p_dw = subparsers.add_parser("delete-workflow", help="从预设库删除 workflow")
+    g_dw = p_dw.add_mutually_exclusive_group(required=True)
+    g_dw.add_argument("--name", "-n", metavar="NAME", help="预设名称")
+    g_dw.add_argument("--preset-id", metavar="UUID", help="预设 id")
+
+    # --- export-workflow ---
+    p_ew = subparsers.add_parser(
+        "export-workflow",
+        help="将预设库中的 workflow 导出为 JSON 文件",
+    )
+    g_ew = p_ew.add_mutually_exclusive_group(required=True)
+    g_ew.add_argument("--name", "-n", metavar="NAME", help="预设名称")
+    g_ew.add_argument("--preset-id", metavar="UUID", help="预设 id")
+    p_ew.add_argument(
+        "output",
+        metavar="OUTPUT.json",
+        help="输出 JSON 路径",
+    )
+
+    # --- workflow-import ---
+    p_wi = subparsers.add_parser(
+        "workflow-import",
+        help="从 workflow JSON 文件导入到预设库",
+    )
+    p_wi.add_argument("input", metavar="INPUT.json", help="workflow JSON 文件")
+    p_wi.add_argument("--name", "-n", required=True, metavar="NAME", help="写入预设库的名称")
+    p_wi.add_argument(
+        "--preset-id",
+        default=None,
+        metavar="UUID",
+        help="更新已有预设的 id",
+    )
+
     # --- save-workflow ---
     p_sw = subparsers.add_parser(
         "save-workflow",
-        help="将当前参数组合保存为 workflow JSON（可加载回 GUI 或再次 CLI 使用）",
+        help="将当前参数组合保存为 workflow JSON 文件",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_sw)
@@ -636,7 +831,7 @@ def run_cli() -> None:
         "--name", "-n",
         default="cli_workflow",
         metavar="NAME",
-        help="workflow 预设名称（默认 cli_workflow）",
+        help="写入 JSON 内的预设名称（默认 cli_workflow）",
     )
     p_sw.add_argument(
         "output",
@@ -710,7 +905,12 @@ def run_cli() -> None:
         "list-backgrounds": cmd_list_backgrounds,
         "list-resolutions": cmd_list_resolutions,
         "list-iphones": cmd_list_iphones,
+        "list-workflows": cmd_list_workflows,
         "save-workflow": cmd_save_workflow,
+        "save-workflow-preset": cmd_save_workflow_preset,
+        "delete-workflow": cmd_delete_workflow,
+        "export-workflow": cmd_export_workflow,
+        "workflow-import": cmd_workflow_import,
         "export-image": cmd_export_image,
         "export-video": cmd_export_video,
         "gui": cmd_gui,

@@ -27,6 +27,39 @@ python main.py <command> [options]
 
 ---
 
+## Step 0b — Screen recording with audio (TangiRecord → TangiPromo)
+
+When the promo needs **app sound** (e.g. TangiFlow brainwave tones), record with **TangiRecord** first. TangiPromo does not capture simulator audio — the `--screen` file must already contain an audio track.
+
+**Pipeline**
+
+```
+TangiRecord (in_app hybrid)  →  mp4 with has_audio: true  →  TangiPromo export-video --screen … --full-import-video
+```
+
+**Agent steps**
+
+1. Read **`/path/to/tangirecord/SKILL.md`** section [Recording with audio](../tangirecord/SKILL.md#recording-with-audio).
+2. Install **Debug** TangiFlow on the simulator (one-time).
+3. Run: `python /path/to/tangirecord/main.py run plans/tangiflow_demo_15s.json`
+4. Confirm JSON: `"has_audio": true`.
+5. Export promo using that mp4 as `--screen` (audio is preserved):
+
+```bash
+python main.py export-video \
+  --background "星空粒子" --ratio 9:16 \
+  --iphone "iPhone 17 Pro Max" --iphone-theme deep_blue \
+  --screen /path/to/tangirecord/output/tangiflow_demo_15s.mp4 \
+  --full-import-video \
+  --duration 15 --fps 30 \
+  --resolution 1080x1920 \
+  promo_final.mp4
+```
+
+Do **not** use BlackHole `--with-audio` for TangiFlow — use TangiRecord `in_app` + `hybrid` instead.
+
+---
+
 ## Step 1 — Always discover first
 
 **Never guess names. Run these before any export:**
@@ -136,13 +169,48 @@ python main.py export-video --workflow preset.json \
 
 ---
 
-### `save-workflow` — Save current config as a reusable JSON
+### Workflow presets (CLI + GUI shared library)
+
+The GUI saves named workflows to a local library (`workflow_presets.json` under the app data directory). The CLI uses the **same store** — agents should prefer `--workflow-preset` over copying JSON files.
+
+| Command | Purpose |
+|---------|---------|
+| `list-workflows` | List preset names (add `--json` for ids) |
+| `save-workflow-preset` | Save current CLI flags into the library |
+| `delete-workflow` | Remove by `--name` or `--preset-id` |
+| `export-workflow` | Export one preset to a `.json` file |
+| `workflow-import` | Import a `.json` file into the library |
+| `save-workflow` | Write a standalone `.json` file (optional; not required if using the library) |
+
+```bash
+python main.py list-workflows
+python main.py list-workflows --json
+
+# Use a GUI-saved (or CLI-saved) preset by name
+python main.py export-video \
+  --workflow-preset "my_showcase" \
+  --screen /path/to/demo.mp4 \
+  --full-import-video \
+  out.mp4
+
+# Save current CLI args as a new preset (same name updates in place)
+python main.py save-workflow-preset \
+  --name "my_showcase" \
+  --background "星空粒子" --ratio 9:16 \
+  --iphone "iPhone 17 Pro Max" --iphone-theme deep_blue
+```
+
+Load order for export commands: **`--workflow-preset` / `--workflow-id` first**, then optional **`--workflow PATH`** (file overrides). Other flags still override individual fields last.
+
+---
+
+### `save-workflow` — Save current config as a reusable JSON file
 
 ```bash
 python main.py save-workflow [OPTIONS] OUTPUT.json
 ```
 
-The saved file is 100% compatible with the GUI's "Save Workflow" button — you can load it back in the GUI, or pass it to `--workflow` in future CLI calls.
+The file format matches the preset library. You can load it with `--workflow`, import via `workflow-import`, or open in the GUI.
 
 ```bash
 python main.py save-workflow \
@@ -155,14 +223,13 @@ python main.py save-workflow \
 
 ---
 
-### `export-image` / `export-video` with `--workflow` as base
+### `export-image` / `export-video` with workflow as base
 
 Load a workflow first, then CLI flags **override** individual fields:
 
 ```bash
-# Load GUI-saved preset, override background and resolution
 python main.py export-image \
-  --workflow my_preset.json \
+  --workflow-preset "neon_9x16" \
   --background "极光" \
   --resolution 4K \
   out_4k.png
@@ -172,11 +239,13 @@ python main.py export-image \
 
 ## Step 3 — Full parameter reference
 
-### Shared options (export-image, export-video, save-workflow)
+### Shared options (export-image, export-video, save-workflow, save-workflow-preset)
 
 | Parameter | Values / Format | Notes |
 |-----------|----------------|-------|
-| `--workflow PATH` | JSON file path | Load base config; CLI flags override |
+| `--workflow PATH` | JSON file path | Load base config from file |
+| `--workflow-preset NAME` | From `list-workflows` | Load from shared preset library |
+| `--workflow-id UUID` | From `list-workflows --json` | Load preset by id |
 | `--background NAME` | From `list-backgrounds` | e.g. `"霓虹光效"` |
 | `--bg-speed PCT` | `0`–`300` (default `100`) | Animation speed percentage |
 | `--bg-code PATH_OR_CODE` | File path or Python string | Activates Custom Code background |
@@ -346,12 +415,12 @@ python main.py export-image \
   --text "Feature Name" --text-y 0.88 \
   --resolution 1080x1920 out.png
 
-# Video with screen recording
+# Video with screen recording (from TangiRecord; use --full-import-video if screen has audio)
 python main.py export-video \
   --background "星空粒子" --ratio 9:16 \
   --iphone "iPhone 17 Pro Max" --iphone-theme deep_blue \
-  --screen /abs/path/demo.mp4 \
-  --duration 10 --fps 30 --full-import-video \
+  --screen /abs/path/tangirecord/output/tangiflow_demo_15s.mp4 \
+  --duration 15 --fps 30 --full-import-video \
   --resolution 1080x1920 out.mp4
 
 # Save a workflow for reuse

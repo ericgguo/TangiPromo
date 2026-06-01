@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,13 +11,25 @@ from typing import Any, Optional
 from PySide6.QtCore import QStandardPaths
 
 
+def workflow_presets_path() -> Path:
+    """Path to the shared workflow preset library (GUI + CLI)."""
+    override = os.environ.get("TANGIPROMO_DATA_DIR", "").strip()
+    if override:
+        root = Path(override)
+    else:
+        root_str = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppDataLocation
+        )
+        if not root_str:
+            root = Path.home() / "Library/Application Support/TangiPromo"
+        else:
+            root = Path(root_str)
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "workflow_presets.json"
+
+
 def _store_file() -> Path:
-    root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-    if not root:
-        root = str(Path.home() / ".promokit_data")
-    p = Path(root)
-    p.mkdir(parents=True, exist_ok=True)
-    return p / "workflow_presets.json"
+    return workflow_presets_path()
 
 
 @dataclass
@@ -82,10 +95,23 @@ class WorkflowPresetStore:
                 return p
         return None
 
+    def by_name(self, name: str) -> Optional[WorkflowPreset]:
+        key = name.strip()
+        if not key:
+            return None
+        for p in self._presets:
+            if p.name == key:
+                return p
+        return None
+
     def upsert(
         self, name: str, payload: dict[str, Any], preset_id: Optional[str] = None
     ) -> WorkflowPreset:
         name = name.strip()
+        if not preset_id:
+            existing = self.by_name(name)
+            if existing:
+                preset_id = existing.id
         if preset_id:
             for i, p in enumerate(self._presets):
                 if p.id == preset_id:
@@ -106,4 +132,11 @@ class WorkflowPresetStore:
             self.save_to_disk()
             return True
         return False
+
+
+__all__ = [
+    "WorkflowPreset",
+    "WorkflowPresetStore",
+    "workflow_presets_path",
+]
 

@@ -401,7 +401,7 @@ class PromoSession:
     # 加载 workflow preset
     # ------------------------------------------------------------------
 
-    def load_workflow(self, source: "str | dict[str, Any]") -> list[str]:
+    def load_workflow(self, source: "str | Path | dict[str, Any]") -> list[str]:
         """
         从 workflow payload（dict）或 JSON 文件路径加载整套工作流。
         payload 格式与 GUI「保存工作流」完全一致。
