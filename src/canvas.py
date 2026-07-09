@@ -3,7 +3,7 @@ Animated preview canvas.
 
 • Runs at up to 60 FPS via QTimer.
 • Maintains correct aspect ratio inside the widget.
-• Supports drag-to-move for the iPhone mockup and text layers.
+• Supports drag-to-move for the device mockup and text layers.
 • render_frame() is the single rendering entry-point shared with the exporter.
 """
 from __future__ import annotations
@@ -15,8 +15,11 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from .iphone import IPhoneRenderer, MODEL_ORDER, layout
-from .iphone_manifest import default_theme_for_model
+from .iphone import IPhoneRenderer, MODEL_ORDER as IPHONE_MODEL_ORDER, layout as iphone_layout
+from .iphone_manifest import default_theme_for_model as default_iphone_theme
+from .mac import MacRenderer, MODEL_ORDER as MAC_MODEL_ORDER, layout as mac_layout
+from .mac_manifest import default_theme_for_model as default_mac_theme
+from .screen_slot import ScreenSlot
 from .text_layer import TextLayer
 from .watermark import (
     WatermarkState,
@@ -26,49 +29,20 @@ from .watermark import (
 )
 
 
-_RENDERER = IPhoneRenderer()
+_IPHONE_RENDERER = IPhoneRenderer()
+_MAC_RENDERER = MacRenderer()
 
-# Sentinel for "dragging the iPhone"
-_DRAG_IPHONE = object()
-
-
-def _decode_frame_at_time(
-    cap,
-    t: float,
-    fps: float,
-    duration_sec: Optional[float],
-):
-    """从已打开的 cv2.VideoCapture 按时间（秒）取一帧为 QPixmap；失败返回 None。"""
-    try:
-        import cv2
-        from PySide6.QtGui import QImage, QPixmap
-        if duration_sec is not None and duration_sec > 0:
-            t = min(max(0.0, t), max(0.0, duration_sec - 0.5 / fps))
-        else:
-            t = max(0.0, t)
-        idx = int(t * fps + 0.5)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if not ret and idx > 0:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx - 1))
-            ret, frame = cap.read()
-        if not ret:
-            return None
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
-        h, w, c = frame_rgb.shape
-        img = QImage(
-            frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
-        ).copy()
-        return QPixmap.fromImage(img)
-    except Exception:
-        return None
+_DRAG_PHONE = object()
+_DRAG_MAC = object()
 
 
 class Canvas(QWidget):
     # Emitted when a text layer is clicked (passes layer index, or -1 for none)
     layer_selected = Signal(int)
-    # Emitted when iPhone position changes
+    # Emitted when device position changes (phone or computer mode)
     iphone_moved = Signal(float, float)
+    device_moved = iphone_moved
+    device_edit_target_changed = Signal(str)
     # 水印索引（用于同步右侧输入框）
     watermark_moved = Signal(int)
     # 当前时间（秒）变化，用于时间轴 UI 跟随
@@ -84,21 +58,24 @@ class Canvas(QWidget):
         self.background = None          # Background instance
         self.output_ratio: tuple[int, int] = (16, 9)
 
-        _m0 = MODEL_ORDER[0] if MODEL_ORDER else "iPhone 17 Pro Max"
+        _m0 = IPHONE_MODEL_ORDER[0] if IPHONE_MODEL_ORDER else "iPhone 17 Pro Max"
+        self.device_mode: str = "phone"  # "phone" | "computer" | "both"
+        self.device_edit_target: str = "phone"  # both 模式下侧栏编辑目标
         self.iphone_model: str = _m0
-        self.iphone_theme: str = default_theme_for_model(_m0)
+        self.iphone_theme: str = default_iphone_theme(_m0)
         self.iphone_scale: float = 0.72
         self.iphone_pos: tuple[float, float] = (0.5, 0.5)
         self.show_iphone: bool = True
 
-        self.screen_pixmap: Optional[QPixmap] = None   # static image
-        self._screen_image_path: Optional[str] = None
-        self.video_cap = None                           # cv2.VideoCapture
-        self.video_frame: Optional[QPixmap] = None
-        self._video_path: Optional[str] = None          # 源文件路径（导出线程可另开 capture）
-        # 导入视频的元数据（用于导出 seek / 「完整包含片长」）
-        self._video_fps: float = 30.0
-        self._video_duration_sec: Optional[float] = None
+        _mac0 = MAC_MODEL_ORDER[0] if MAC_MODEL_ORDER else "Window Dark"
+        self.mac_model: str = _mac0
+        self.mac_theme: str = default_mac_theme(_mac0)
+        self.mac_scale: float = 0.58
+        self.mac_pos: tuple[float, float] = (0.5, 0.5)
+        self.show_mac: bool = True
+
+        self.phone_screen = ScreenSlot()
+        self.mac_screen = ScreenSlot()
         # 为 True 时主线程不再对 video_cap read，避免与导出线程争用解码器
         self._export_active: bool = False
 
@@ -125,7 +102,7 @@ class Canvas(QWidget):
         self._timer.start(1000 // 60)
 
         # ── Drag state ───────────────────────────────────────────────────
-        self._drag_item = None            # _DRAG_IPHONE or TextLayer
+        self._drag_item = None            # _DRAG_PHONE | _DRAG_MAC | TextLayer
         self._drag_start_mouse: QPointF | None = None
         self._drag_start_pos: tuple[float, float] | None = None
         self._drag_watermark_idx: Optional[int] = None
@@ -141,80 +118,137 @@ class Canvas(QWidget):
     def reset_time(self) -> None:
         self.set_time(0.0)
 
+    def screen_target(self, target: str | None = None) -> str:
+        if target in ("phone", "mac"):
+            return target
+        if self.device_mode == "computer":
+            return "mac"
+        if self.device_mode == "both":
+            return self.device_edit_target if self.device_edit_target in ("phone", "mac") else "phone"
+        return "phone"
+
+    def screen_slot(self, target: str | None = None) -> ScreenSlot:
+        return self.mac_screen if self.screen_target(target) == "mac" else self.phone_screen
+
+    # ── 兼容旧 API（指向当前模式下的主屏幕槽）────────────────────────────
+
+    @property
+    def screen_pixmap(self) -> Optional[QPixmap]:
+        return self.screen_slot().screen_pixmap
+
+    @screen_pixmap.setter
+    def screen_pixmap(self, pix: Optional[QPixmap]) -> None:
+        self.screen_slot().screen_pixmap = pix
+
+    @property
+    def video_cap(self):
+        return self.screen_slot().video_cap
+
+    @property
+    def video_frame(self) -> Optional[QPixmap]:
+        return self.screen_slot().video_frame
+
+    @video_frame.setter
+    def video_frame(self, pm: Optional[QPixmap]) -> None:
+        self.screen_slot().video_frame = pm
+
+    @property
+    def _video_path(self) -> Optional[str]:
+        return self.screen_slot()._video_path
+
+    @property
+    def _video_fps(self) -> float:
+        return self.screen_slot()._video_fps
+
+    @property
+    def _video_duration_sec(self) -> Optional[float]:
+        return self.screen_slot()._video_duration_sec
+
     def set_time(self, t: float) -> None:
         """设置当前预览时间（秒），并同步视频帧与画面刷新。"""
         self.time = max(0.0, float(t))
-        if self.video_cap and not self._export_active:
-            self._seek_video_to_time(self.time)
+        if not self._export_active:
+            for slot in (self.phone_screen, self.mac_screen):
+                if slot.video_cap:
+                    slot.seek_to_time(self.time)
         self.time_changed.emit(self.time)
         self.update()
 
-    def set_video(self, path: str) -> None:
+    def set_video(self, path: str, target: str | None = None) -> None:
         try:
-            import cv2
-            if self.video_cap:
-                self.video_cap.release()
-            self.video_cap = cv2.VideoCapture(path)
-            self._video_path = path
-            self.screen_pixmap = None
-            fps = float(self.video_cap.get(cv2.CAP_PROP_FPS) or 0.0)
-            self._video_fps = fps if fps > 1e-6 else 30.0
-            fc = float(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
-            if fc > 0 and self._video_fps > 0:
-                self._video_duration_sec = fc / self._video_fps
-            else:
-                self._video_duration_sec = None
-            # Keep imported video frame fully time-driven.
+            self.screen_slot(target).set_video(path)
             self.set_time(0.0)
         except ImportError:
             pass
 
-    def clear_video(self) -> None:
-        if self.video_cap:
-            self.video_cap.release()
-            self.video_cap = None
-        self._video_path = None
-        self.video_frame = None
-        self._video_fps = 30.0
-        self._video_duration_sec = None
+    def clear_video(self, target: str | None = None) -> None:
+        self.screen_slot(target).clear_video()
 
-    def set_screen_image_path(self, path: str) -> None:
-        self._screen_image_path = path
+    def clear_screen(self, target: str | None = None) -> None:
+        self.screen_slot(target).clear()
 
-    def screen_image_path(self) -> Optional[str]:
-        return self._screen_image_path
+    def set_screen_image_path(self, path: str, target: str | None = None) -> None:
+        self.screen_slot(target).set_image_path(path)
+
+    def screen_image_path(self, target: str | None = None) -> Optional[str]:
+        return self.screen_slot(target).image_path()
 
     def set_export_active(self, active: bool) -> None:
         """导出 MP4 时设为 True：主线程暂停对同一 VideoCapture 的读取，避免与解码线程冲突。"""
         self._export_active = bool(active)
 
     def video_fps(self) -> float:
-        return self._video_fps
+        return max(
+            (s.video_fps() for s in (self.phone_screen, self.mac_screen) if s.has_video()),
+            default=30.0,
+        )
 
-    def video_source_path(self) -> Optional[str]:
-        """已导入视频的本地路径；无视频时为 None。"""
-        return self._video_path
+    def video_source_path(self, target: str | None = None) -> Optional[str]:
+        if target in ("phone", "mac"):
+            return self.screen_slot(target).video_source_path()
+        for slot in (self.phone_screen, self.mac_screen):
+            p = slot.video_source_path()
+            if p:
+                return p
+        return None
+
+    def has_imported_video(self) -> bool:
+        return self.phone_screen.has_video() or self.mac_screen.has_video()
+
+    def imported_video_duration_sec(self) -> Optional[float]:
+        durs = [
+            d
+            for s in (self.phone_screen, self.mac_screen)
+            if (d := s.imported_video_duration_sec()) is not None and d > 0
+        ]
+        return max(durs) if durs else None
+
+    def set_video_time_for_export(self, t: float) -> None:
+        """[兼容] 导出管线已改为独立 VideoCapture。"""
+        for slot in (self.phone_screen, self.mac_screen):
+            if slot.video_cap:
+                slot.seek_to_time(t)
 
     def preview_render_size(self) -> tuple[int, int]:
         """与 paintEvent 中 clip 的画布区域相同（眼睛看到的预览像素宽高）。"""
         return self._canvas_size()
 
-    def imported_video_duration_sec(self) -> Optional[float]:
-        """已导入视频的时长（秒）；无视频或未解析到时为 None。"""
-        return self._video_duration_sec
-
-    def set_video_time_for_export(self, t: float) -> None:
-        """[兼容] 仍可用，但导出管线已改为独立 VideoCapture；优先不要用与主线程共用 cap。"""
-        if not self.video_cap:
-            return
-        pm = _decode_frame_at_time(self.video_cap, t, self._video_fps, self._video_duration_sec)
-        if pm is not None:
-            self.video_frame = pm
-
     def center_iphone(self) -> None:
         """将设备置于画布正中央（归一化坐标 0.5, 0.5）。"""
-        self.iphone_pos = (0.5, 0.5)
-        self.iphone_moved.emit(0.5, 0.5)
+        self.center_device()
+
+    def center_device(self) -> None:
+        """将当前编辑目标（或单模式设备）置于画布正中央。"""
+        if self.device_mode == "both":
+            if self.device_edit_target == "mac":
+                self.mac_pos = (0.5, 0.5)
+            else:
+                self.iphone_pos = (0.5, 0.5)
+        elif self.device_mode == "computer":
+            self.mac_pos = (0.5, 0.5)
+        else:
+            self.iphone_pos = (0.5, 0.5)
+        self.device_moved.emit(0.5, 0.5)
         self.update()
 
     # ------------------------------------------------------------------
@@ -259,14 +293,22 @@ class Canvas(QWidget):
         else:
             painter.fillRect(0, 0, width, height, QColor(15, 15, 30))
 
-        # iPhone
-        if self.show_iphone:
-            content = self.video_frame or self.screen_pixmap
-            _RENDERER.render(
+        # Device mockup(s)
+        phone_content = self.phone_screen.current_content()
+        mac_content = self.mac_screen.current_content()
+        if self.device_mode in ("phone", "both") and self.show_iphone:
+            _IPHONE_RENDERER.render(
                 painter, width, height,
                 self.iphone_model, self.iphone_theme,
                 self.iphone_scale, self.iphone_pos,
-                content,
+                phone_content,
+            )
+        if self.device_mode in ("computer", "both") and self.show_mac:
+            _MAC_RENDERER.render(
+                painter, width, height,
+                self.mac_model, self.mac_theme,
+                self.mac_scale, self.mac_pos,
+                mac_content,
             )
 
         # Text layers
@@ -461,13 +503,17 @@ class Canvas(QWidget):
                 self.update()
                 return
 
-        # Hit-test iPhone body
-        if self.show_iphone and self._hit_iphone(nx, ny):
+        # Hit-test device bodies（Mac 后绘制，优先命中）
+        hit = self._hit_device_at(nx, ny)
+        if hit is not None:
             self.selected_layer = -1
             self.layer_selected.emit(-1)
-            self._drag_item = _DRAG_IPHONE
+            self._drag_item = _DRAG_MAC if hit == "mac" else _DRAG_PHONE
             self._drag_start_mouse = QPointF(nx, ny)
-            self._drag_start_pos = self.iphone_pos
+            self._drag_start_pos = self.mac_pos if hit == "mac" else self.iphone_pos
+            if self.device_mode == "both":
+                self.device_edit_target = hit
+                self.device_edit_target_changed.emit(hit)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
@@ -502,7 +548,7 @@ class Canvas(QWidget):
             # Hover cursor
             if nx is not None and (
                 self._hit_watermark(nx, ny)
-                or self._hit_iphone(nx, ny)
+                or self._hit_device_at(nx, ny) is not None
                 or self._hit_any_layer(nx, ny)
             ):
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -516,11 +562,16 @@ class Canvas(QWidget):
         dx = nx - self._drag_start_mouse.x()
         dy = ny - self._drag_start_mouse.y()
 
-        if self._drag_item is _DRAG_IPHONE:
+        if self._drag_item is _DRAG_PHONE:
             new_x = max(0.05, min(0.95, self._drag_start_pos[0] + dx))
             new_y = max(0.05, min(0.95, self._drag_start_pos[1] + dy))
             self.iphone_pos = (new_x, new_y)
-            self.iphone_moved.emit(new_x, new_y)
+            self.device_moved.emit(new_x, new_y)
+        elif self._drag_item is _DRAG_MAC:
+            new_x = max(0.05, min(0.95, self._drag_start_pos[0] + dx))
+            new_y = max(0.05, min(0.95, self._drag_start_pos[1] + dy))
+            self.mac_pos = (new_x, new_y)
+            self.device_moved.emit(new_x, new_y)
         elif isinstance(self._drag_item, TextLayer):
             layer = self._drag_item
             layer.x = max(0.0, min(1.0, self._drag_start_pos[0] + dx))
@@ -547,48 +598,24 @@ class Canvas(QWidget):
 
     def _tick(self) -> None:
         if not self._paused:
-            if self.video_cap and not self._export_active:
-                if self._advance_video():
-                    self.time += 1.0 / max(self._video_fps, 1e-6)
-                    if (
-                        self._video_duration_sec is not None
-                        and self._video_duration_sec > 0
-                        and self.time >= self._video_duration_sec
-                    ):
-                        self.time = self.time % self._video_duration_sec
+            has_video = False
+            if not self._export_active:
+                for slot in (self.phone_screen, self.mac_screen):
+                    if slot.video_cap and slot.advance_video():
+                        has_video = True
+            if has_video:
+                fps = max(
+                    (s.video_fps() for s in (self.phone_screen, self.mac_screen) if s.video_cap),
+                    default=30.0,
+                )
+                self.time += 1.0 / max(fps, 1e-6)
+                dur = self.imported_video_duration_sec()
+                if dur is not None and dur > 0 and self.time >= dur:
+                    self.time = self.time % dur
             else:
                 self.time += 1.0 / 60.0
             self.time_changed.emit(self.time)
         self.update()
-
-    def _advance_video(self) -> bool:
-        try:
-            import cv2
-            ret, frame = self.video_cap.read()
-            if not ret:
-                self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = self.video_cap.read()
-            if ret:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, c = frame_rgb.shape
-                img = QImage(
-                    frame_rgb.data, w, h, w * c, QImage.Format.Format_RGB888
-                )
-                self.video_frame = QPixmap.fromImage(img)
-                return True
-        except Exception:
-            return False
-        return False
-
-    def _seek_video_to_time(self, t: float) -> None:
-        """按时间 seek 到导入视频对应帧，用于时间轴拖动预览。"""
-        if not self.video_cap:
-            return
-        pm = _decode_frame_at_time(
-            self.video_cap, t, self._video_fps, self._video_duration_sec
-        )
-        if pm is not None:
-            self.video_frame = pm
 
     def _canvas_size(self) -> tuple[int, int]:
         rw, rh = self.output_ratio
@@ -616,18 +643,40 @@ class Canvas(QWidget):
             return None, None
         return px / cw, py / ch
 
-    def _hit_iphone(self, nx: float, ny: float) -> bool:
+    def _iphone_body_contains(self, nx: float, ny: float) -> bool:
+        if not self.show_iphone or self.device_mode not in ("phone", "both"):
+            return False
         cw, ch = self._canvas_size()
-        body, _ = layout(
-            cw,
-            ch,
-            self.iphone_model,
-            self.iphone_theme,
-            self.iphone_scale,
-            self.iphone_pos,
+        body, _ = iphone_layout(
+            cw, ch,
+            self.iphone_model, self.iphone_theme,
+            self.iphone_scale, self.iphone_pos,
         )
         px, py = nx * cw, ny * ch
         return body.contains(QPointF(px, py))
+
+    def _mac_body_contains(self, nx: float, ny: float) -> bool:
+        if not self.show_mac or self.device_mode not in ("computer", "both"):
+            return False
+        cw, ch = self._canvas_size()
+        body, _ = mac_layout(
+            cw, ch,
+            self.mac_model, self.mac_theme,
+            self.mac_scale, self.mac_pos,
+        )
+        px, py = nx * cw, ny * ch
+        return body.contains(QPointF(px, py))
+
+    def _hit_device_at(self, nx: float, ny: float) -> str | None:
+        """返回 'mac' | 'phone' | None（Mac 优先）。"""
+        if self._mac_body_contains(nx, ny):
+            return "mac"
+        if self._iphone_body_contains(nx, ny):
+            return "phone"
+        return None
+
+    def _hit_device(self, nx: float, ny: float) -> bool:
+        return self._hit_device_at(nx, ny) is not None
 
     def _hit_any_layer(self, nx: float, ny: float) -> bool:
         cw, ch = self._canvas_size()

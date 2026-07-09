@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
-from typing import Optional, Tuple
+from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPixmap
 
+from .device_content import draw_content_cover, load_pixmap, screen_norm_rect
 from .iphone_manifest import (
     DEVICE_PNG,
     MODEL_ORDER,
@@ -20,8 +20,7 @@ _ASSET_IOS = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "assets", "iphone", "third_party", "Exports", "iOS")
 )
 
-# 屏幕区域缓存：绝对路径 -> (nx, ny, nw, nh) 相对整图 0~1
-_screen_norm_cache: dict[str, tuple[float, float, float, float]] = {}
+_IPHONE_SCREEN_FALLBACK = (0.065, 0.033, 0.868, 0.935)
 
 
 def _abs_path_for(model: str, theme: str) -> str | None:
@@ -34,51 +33,12 @@ def _abs_path_for(model: str, theme: str) -> str | None:
     return os.path.join(_ASSET_IOS, rel)
 
 
-@lru_cache(maxsize=64)
-def _load_pixmap(abs_path: str) -> Optional[QPixmap]:
-    p = QPixmap(abs_path)
-    return p if not p.isNull() else None
-
-
-def screen_norm_rect(abs_path: str) -> tuple[float, float, float, float]:
-    """透明屏幕区域相对整图的归一化矩形 (x,y,w,h)，与中心连通域。"""
-    if abs_path in _screen_norm_cache:
-        return _screen_norm_cache[abs_path]
-    fallback = (0.065, 0.033, 0.868, 0.935)
-    if not os.path.isfile(abs_path):
-        _screen_norm_cache[abs_path] = fallback
-        return fallback
-    try:
-        import cv2
-        import numpy as np
-        img = cv2.imread(abs_path, cv2.IMREAD_UNCHANGED)
-        if img is None or img.ndim < 3 or img.shape[2] < 4:
-            _screen_norm_cache[abs_path] = fallback
-            return fallback
-        alpha = img[:, :, 3]
-        h, w = alpha.shape
-        mask = (alpha < 40).astype(np.uint8)
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=4)
-        cx, cy = w // 2, h // 2
-        lab = int(labels[cy, cx])
-        if lab <= 0:
-            _screen_norm_cache[abs_path] = fallback
-            return fallback
-        x, y, bw, bh, _area = stats[lab]
-        t = (x / w, y / h, bw / w, bh / h)
-        _screen_norm_cache[abs_path] = t
-        return t
-    except Exception:
-        _screen_norm_cache[abs_path] = fallback
-        return fallback
-
-
 def device_aspect_ratio(model: str, theme: str) -> float:
     """机身宽 / 高（用于点击检测等）。"""
     p = _abs_path_for(model, theme)
     if not p or not os.path.isfile(p):
         return 0.48
-    pm = _load_pixmap(p)
+    pm = load_pixmap(p)
     if pm is None or pm.height() == 0:
         return 0.48
     return pm.width() / pm.height()
@@ -97,7 +57,7 @@ def layout(
     scale：机身高度占画布高度比例。
     """
     p = _abs_path_for(model_name, theme_name)
-    pm = _load_pixmap(p) if p and os.path.isfile(p) else None
+    pm = load_pixmap(p) if p and os.path.isfile(p) else None
     if pm is None or pm.height() == 0:
         # 占位：与旧版比例接近的竖屏手机
         bh = canvas_h * scale
@@ -116,7 +76,7 @@ def layout(
     cy = pos[1] * canvas_h
     body = QRectF(cx - body_w / 2, cy - body_h / 2, body_w, body_h)
 
-    nx, ny, nw, nh = screen_norm_rect(p)
+    nx, ny, nw, nh = screen_norm_rect(p, _IPHONE_SCREEN_FALLBACK)
     scr = QRectF(
         body.x() + nx * body_w,
         body.y() + ny * body_h,
@@ -141,7 +101,7 @@ class IPhoneRenderer:
         content: Optional[QPixmap],
     ) -> None:
         p = _abs_path_for(model_name, theme_name)
-        pm = _load_pixmap(p) if p and os.path.isfile(p) else None
+        pm = load_pixmap(p) if p and os.path.isfile(p) else None
 
         body, screen = layout(canvas_w, canvas_h, model_name, theme_name, scale, pos)
 
@@ -175,25 +135,13 @@ class IPhoneRenderer:
         if content and not content.isNull():
             painter.save()
             painter.setClipPath(path)
-            self._draw_content(painter, screen, content)
+            draw_content_cover(painter, screen, content)
             painter.restore()
 
         # 框图压在最上层（透明区域露出已绘制内容）
         painter.drawPixmap(body, pm, QRectF(0, 0, pm.width(), pm.height()))
 
         painter.restore()
-
-    @staticmethod
-    def _draw_content(painter: QPainter, screen: QRectF, pix: QPixmap) -> None:
-        pw, ph = pix.width(), pix.height()
-        if pw == 0 or ph == 0:
-            return
-        sc = max(screen.width() / pw, screen.height() / ph)
-        dw, dh = pw * sc, ph * sc
-        dx = screen.x() + (screen.width() - dw) / 2
-        dy = screen.y() + (screen.height() - dh) / 2
-        painter.drawPixmap(QRectF(dx, dy, dw, dh), pix, QRectF(0, 0, pw, ph))
-
 
 # 供 UI 使用（顺序与 manifest 一致）
 MODELS = MODEL_ORDER

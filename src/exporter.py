@@ -20,8 +20,79 @@ from typing import Callable, Optional
 from PySide6.QtCore import QObject, Qt, Signal, QThread
 from PySide6.QtGui import QImage, QPainter, QPixmap
 
-from .canvas import _decode_frame_at_time
 from .i18n import tr
+
+
+class _SlotExportVideo:
+    """导出时为单个 ScreenSlot 按时间解码视频帧。"""
+
+    def __init__(self, slot, cv2_module) -> None:
+        self.slot = slot
+        self._cv2 = cv2_module
+        self.cap = None
+        self.fps = 30.0
+        self.dur: Optional[float] = None
+        self.current_idx: int | None = None
+        self.current_pm: QPixmap | None = None
+        self.eof = False
+        vpath = slot.video_source_path()
+        if not vpath:
+            return
+        self.cap = cv2_module.VideoCapture(vpath)
+        if not self.cap.isOpened():
+            self.cap.release()
+            self.cap = None
+            return
+        self.fps = max(float(slot.video_fps() or 30.0), 1e-6)
+        self.dur = slot.imported_video_duration_sec()
+        self._prime_at(0.0)
+
+    def _clamp(self, tt: float) -> float:
+        if self.dur is not None and self.dur > 0:
+            return min(max(0.0, tt), self.dur - 0.5 / self.fps)
+        return max(0.0, tt)
+
+    def _bgr_to_pixmap(self, frame) -> QPixmap:
+        frame_rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB).copy()
+        fh, fw, fc = frame_rgb.shape
+        img = QImage(
+            frame_rgb.data, fw, fh, fw * fc, QImage.Format.Format_RGB888
+        ).copy()
+        return QPixmap.fromImage(img)
+
+    def _prime_at(self, t: float) -> None:
+        if self.cap is None:
+            return
+        tt = self._clamp(t)
+        idx0 = int(tt * self.fps + 0.5)
+        self.cap.set(self._cv2.CAP_PROP_POS_FRAMES, idx0)
+        ret, frame = self.cap.read()
+        if ret:
+            self.current_pm = self._bgr_to_pixmap(frame)
+            self.current_idx = idx0
+        else:
+            self.eof = True
+            self.current_idx = idx0
+
+    def sync_at(self, t: float) -> None:
+        if self.cap is None:
+            return
+        tt = self._clamp(t)
+        target_idx = int(tt * self.fps + 0.5)
+        while self.current_idx is not None and self.current_idx < target_idx and not self.eof:
+            ret, frame = self.cap.read()
+            if not ret:
+                self.eof = True
+                break
+            self.current_pm = self._bgr_to_pixmap(frame)
+            self.current_idx += 1
+        if self.current_pm is not None:
+            self.slot.video_frame = self.current_pm
+
+    def release(self) -> None:
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
 
 
 def _ffmpeg_path() -> Optional[str]:
@@ -190,13 +261,11 @@ class ExportWorker(QThread):
             self.error.emit(tr("export.err.invalid_wh"))
             return
 
-        export_cap = None
-        vpath = self.canvas.video_source_path()
-        if vpath:
-            export_cap = cv2.VideoCapture(vpath)
-            if not export_cap.isOpened():
-                export_cap.release()
-                export_cap = None
+        export_tracks: list[_SlotExportVideo] = []
+        for slot in (self.canvas.phone_screen, self.canvas.mac_screen):
+            track = _SlotExportVideo(slot, cv2)
+            if track.cap is not None:
+                export_tracks.append(track)
 
         # yuv420p requires even dimensions
         ow = ow if ow % 2 == 0 else ow + 1
@@ -232,35 +301,6 @@ class ExportWorker(QThread):
 
         self.canvas.set_export_active(True)
         try:
-            src_fps = float(self.canvas.video_fps())
-            src_dur = self.canvas.imported_video_duration_sec()
-
-            def _clamp_src_time(tt: float) -> float:
-                if src_dur is not None and src_dur > 0 and src_fps > 1e-6:
-                    return min(max(0.0, tt), src_dur - 0.5 / src_fps)
-                return max(0.0, tt)
-
-            current_idx: int | None = None
-            current_pm: QPixmap | None = None
-            eof = False
-
-            if export_cap is not None and src_fps > 1e-6:
-                t0 = _clamp_src_time(0.0)
-                idx0 = int(t0 * src_fps + 0.5)
-                export_cap.set(cv2.CAP_PROP_POS_FRAMES, idx0)
-                ret, frame = export_cap.read()
-                if ret:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
-                    fh, fw, fc = frame_rgb.shape
-                    img0 = QImage(
-                        frame_rgb.data, fw, fh, fw * fc, QImage.Format.Format_RGB888
-                    ).copy()
-                    current_pm = QPixmap.fromImage(img0)
-                    current_idx = idx0
-                else:
-                    eof = True
-                    current_idx = idx0
-
             row_bytes = ow * 3
 
             for i in range(total):
@@ -269,30 +309,8 @@ class ExportWorker(QThread):
                     return
 
                 t = i / self.fps
-
-                if export_cap is not None and src_fps > 1e-6 and not eof:
-                    tt = _clamp_src_time(t)
-                    target_idx = int(tt * src_fps + 0.5)
-
-                    while current_idx is not None and current_idx < target_idx:
-                        if self.isInterruptionRequested():
-                            self.cancelled.emit()
-                            return
-                        ret, frame = export_cap.read()
-                        if not ret:
-                            eof = True
-                            break
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy()
-                        fh, fw, fc = frame_rgb.shape
-                        qimg = QImage(
-                            frame_rgb.data, fw, fh, fw * fc, QImage.Format.Format_RGB888
-                        ).copy()
-                        current_pm = QPixmap.fromImage(qimg)
-                        current_idx += 1
-
-                    self.canvas.video_frame = current_pm
-                elif export_cap is not None:
-                    self.canvas.video_frame = current_pm
+                for track in export_tracks:
+                    track.sync_at(t)
 
                 img = QImage(ow, oh, QImage.Format.Format_RGB32)
                 _paint_export_frame(self.canvas, img, ow, oh, t)
@@ -380,8 +398,8 @@ class ExportWorker(QThread):
 
             self.finished.emit(self.path)
         finally:
-            if export_cap is not None:
-                export_cap.release()
+            for track in export_tracks:
+                track.release()
             _cleanup_ffmpeg(ffmpeg_proc)
             if cv_writer is not None:
                 try:

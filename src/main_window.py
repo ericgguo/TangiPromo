@@ -24,7 +24,9 @@ from .effect_store import EffectStore
 from .canvas import Canvas
 from .exporter import Exporter, ExportWorker, RESOLUTIONS
 from .iphone import MODELS
-from .iphone_manifest import DEVICE_PNG
+from .iphone_manifest import DEVICE_PNG as IPHONE_DEVICE_PNG
+from .mac import MODELS as MAC_MODELS
+from .mac_manifest import DEVICE_PNG as MAC_DEVICE_PNG
 from .text_layer import TextLayer
 from .watermark import make_watermark_from_path
 from .workflow_preset_store import WorkflowPresetStore
@@ -36,6 +38,8 @@ from .i18n import (
     custom_code_is_builtin_sample,
     default_custom_code,
     iphone_model_label,
+    mac_model_label,
+    mac_theme_display_name,
     set_locale,
     theme_display_name,
     tr,
@@ -202,6 +206,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._on_model_index_changed(max(0, self._model_combo.currentIndex()))
+        self._on_mac_model_index_changed(max(0, self._mac_model_combo.currentIndex()))
+        self._sync_device_pos_spinboxes_from_canvas()
 
         last_raw = self._settings.value("custom_bg_last_id", "")
         last_id = str(last_raw).strip() if last_raw else ""
@@ -480,8 +486,16 @@ class MainWindow(QMainWindow):
         self._right_tabs.setDocumentMode(True)
         host_lay.addWidget(self._right_tabs, 1)
 
-        # ── Tab: Device (phone + screen + watermark) ─────────────────────
+        # ── Tab: Device (phone / computer + screen + watermark) ──────────
         device_page, lay = _page_scroll()
+
+        self._sec_device_mode = SectionLabel(tr("sec.device_mode"))
+        lay.addWidget(self._sec_device_mode)
+        self._device_mode_combo = QComboBox()
+        self._device_mode_combo.addItem(tr("device.mode.phone"), "phone")
+        self._device_mode_combo.addItem(tr("device.mode.computer"), "computer")
+        self._device_mode_combo.addItem(tr("device.mode.both"), "both")
+        lay.addWidget(self._device_mode_combo)
 
         self._gb_ph, vl_ph = _group(tr("group.phone"))
 
@@ -497,9 +511,46 @@ class MainWindow(QMainWindow):
         vl_ph.addWidget(self._sec_phone_theme)
         vl_ph.addWidget(self._theme_combo)
 
-        ph_form = QFormLayout()
-        ph_form.setContentsMargins(0, 0, 0, 0)
-        ph_form.setSpacing(6)
+        self._show_iphone_cb = QCheckBox(tr("phone.show_iphone"))
+        self._show_iphone_cb.setChecked(True)
+        vl_ph.addWidget(self._show_iphone_cb)
+
+        lay.addWidget(self._gb_ph)
+
+        self._gb_mac, vl_mac = _group(tr("group.mac"))
+        self._mac_model_combo = QComboBox()
+        for m in MAC_MODELS:
+            self._mac_model_combo.addItem(mac_model_label(m), m)
+        self._sec_mac_model = SectionLabel(tr("sec.phone_model"))
+        vl_mac.addWidget(self._sec_mac_model)
+        vl_mac.addWidget(self._mac_model_combo)
+
+        self._mac_theme_combo = QComboBox()
+        self._sec_mac_theme = SectionLabel(tr("sec.phone_theme"))
+        vl_mac.addWidget(self._sec_mac_theme)
+        vl_mac.addWidget(self._mac_theme_combo)
+
+        self._show_mac_cb = QCheckBox(tr("phone.show_mac"))
+        self._show_mac_cb.setChecked(True)
+        vl_mac.addWidget(self._show_mac_cb)
+
+        self._gb_mac.setVisible(False)
+        lay.addWidget(self._gb_mac)
+
+        self._gb_device_pos, vl_pos = _group(tr("group.device_pos"))
+
+        self._sec_device_edit = SectionLabel(tr("sec.device_edit"))
+        vl_pos.addWidget(self._sec_device_edit)
+        self._device_edit_combo = QComboBox()
+        self._device_edit_combo.addItem(tr("device.edit.phone"), "phone")
+        self._device_edit_combo.addItem(tr("device.edit.mac"), "mac")
+        vl_pos.addWidget(self._device_edit_combo)
+        self._sec_device_edit.setVisible(False)
+        self._device_edit_combo.setVisible(False)
+
+        pos_form = QFormLayout()
+        pos_form.setContentsMargins(0, 0, 0, 0)
+        pos_form.setSpacing(6)
         self._phone_scale_spin = QDoubleSpinBox()
         self._phone_scale_spin.setRange(20, 100)
         self._phone_scale_spin.setDecimals(1)
@@ -507,7 +558,7 @@ class MainWindow(QMainWindow):
         self._phone_scale_spin.setValue(72)
         self._phone_scale_spin.setToolTip(tr("phone.tip.size"))
         self._lbl_phone_size = QLabel(tr("phone.size"))
-        ph_form.addRow(self._lbl_phone_size, self._phone_scale_spin)
+        pos_form.addRow(self._lbl_phone_size, self._phone_scale_spin)
 
         self._phone_x_spin = QDoubleSpinBox()
         self._phone_x_spin.setRange(0, 100)
@@ -516,7 +567,7 @@ class MainWindow(QMainWindow):
         self._phone_x_spin.setValue(50)
         self._phone_x_spin.setToolTip(tr("phone.tip.x"))
         self._lbl_phone_x = QLabel(tr("phone.x"))
-        ph_form.addRow(self._lbl_phone_x, self._phone_x_spin)
+        pos_form.addRow(self._lbl_phone_x, self._phone_x_spin)
 
         self._phone_y_spin = QDoubleSpinBox()
         self._phone_y_spin.setRange(0, 100)
@@ -525,25 +576,26 @@ class MainWindow(QMainWindow):
         self._phone_y_spin.setValue(50)
         self._phone_y_spin.setToolTip(tr("phone.tip.y"))
         self._lbl_phone_y = QLabel(tr("phone.y"))
-        ph_form.addRow(self._lbl_phone_y, self._phone_y_spin)
+        pos_form.addRow(self._lbl_phone_y, self._phone_y_spin)
 
-        ph_wrap = QWidget()
-        ph_wrap.setLayout(ph_form)
+        pos_wrap = QWidget()
+        pos_wrap.setLayout(pos_form)
         self._sec_phone_pos = SectionLabel(tr("sec.phone_pos"))
-        vl_ph.addWidget(self._sec_phone_pos)
-        vl_ph.addWidget(ph_wrap)
+        vl_pos.addWidget(self._sec_phone_pos)
+        vl_pos.addWidget(pos_wrap)
 
         self._center_phone_btn = QPushButton(tr("phone.center"))
         self._center_phone_btn.setToolTip(tr("phone.center_tip"))
-        vl_ph.addWidget(self._center_phone_btn)
+        vl_pos.addWidget(self._center_phone_btn)
 
-        self._show_phone_cb = QCheckBox(tr("phone.show"))
-        self._show_phone_cb.setChecked(True)
-        vl_ph.addWidget(self._show_phone_cb)
-
-        lay.addWidget(self._gb_ph)
+        lay.addWidget(self._gb_device_pos)
 
         self._gb_sc, vl_sc = _group(tr("group.screen"))
+
+        self._screen_target_hint = QLabel(tr("screen.target_hint"))
+        self._screen_target_hint.setWordWrap(True)
+        self._screen_target_hint.setStyleSheet("color:#8a8a93;font-size:11px;")
+        vl_sc.addWidget(self._screen_target_hint)
 
         self._load_img_btn = QPushButton(tr("screen.load_img"))
         self._load_vid_btn = QPushButton(tr("screen.load_vid"))
@@ -558,6 +610,13 @@ class MainWindow(QMainWindow):
         vl_sc.addWidget(self._load_img_btn)
         vl_sc.addWidget(self._load_vid_btn)
         vl_sc.addWidget(self._clear_content_btn)
+
+        # ── Path input (paste a file path, press Enter to load) ──
+        self._screen_path_input = QLineEdit()
+        self._screen_path_input.setPlaceholderText(tr("screen.path_ph"))
+        self._screen_path_input.returnPressed.connect(self._on_screen_path_enter)
+        vl_sc.addWidget(self._screen_path_input)
+
         vl_sc.addWidget(self._content_lbl)
         lay.addWidget(self._gb_sc)
 
@@ -811,16 +870,24 @@ class MainWindow(QMainWindow):
         self._pause_btn.clicked.connect(self._toggle_pause)
         self._reset_btn.clicked.connect(self._canvas.reset_time)
 
+        self._device_mode_combo.currentIndexChanged.connect(self._on_device_mode_changed)
+        self._device_edit_combo.currentIndexChanged.connect(self._on_device_edit_target_changed)
         self._model_combo.currentIndexChanged.connect(self._on_model_index_changed)
         self._theme_combo.currentIndexChanged.connect(self._on_theme_index_changed)
-        self._phone_scale_spin.valueChanged.connect(self._on_phone_scale_spin)
-        self._phone_x_spin.valueChanged.connect(self._on_phone_pos_spin)
-        self._phone_y_spin.valueChanged.connect(self._on_phone_pos_spin)
-        self._show_phone_cb.toggled.connect(
-            lambda v: setattr(self._canvas, "show_iphone", v)
+        self._mac_model_combo.currentIndexChanged.connect(self._on_mac_model_index_changed)
+        self._mac_theme_combo.currentIndexChanged.connect(self._on_mac_theme_index_changed)
+        self._phone_scale_spin.valueChanged.connect(self._on_device_scale_spin)
+        self._phone_x_spin.valueChanged.connect(self._on_device_pos_spin)
+        self._phone_y_spin.valueChanged.connect(self._on_device_pos_spin)
+        self._show_iphone_cb.toggled.connect(
+            lambda v: self._on_show_iphone_toggled(v)
+        )
+        self._show_mac_cb.toggled.connect(
+            lambda v: self._on_show_mac_toggled(v)
         )
         self._center_phone_btn.clicked.connect(self._on_center_phone_clicked)
-        self._canvas.iphone_moved.connect(self._sync_phone_pos_spinboxes)
+        self._canvas.device_moved.connect(self._sync_device_pos_spinboxes)
+        self._canvas.device_edit_target_changed.connect(self._on_canvas_device_edit_target)
         self._canvas.watermark_moved.connect(self._sync_watermark_pos_from_canvas)
 
         self._load_img_btn.clicked.connect(self._load_image)
@@ -934,6 +1001,25 @@ class MainWindow(QMainWindow):
         if self._preset_combo.count() > 0 and self._preset_combo.itemData(0) is None:
             self._preset_combo.setItemText(0, tr("code.draft"))
         self._gb_ph.setTitle(tr("group.phone"))
+        self._gb_mac.setTitle(tr("group.mac"))
+        self._gb_device_pos.setTitle(tr("group.device_pos"))
+        self._sec_device_mode.setText(tr("sec.device_mode"))
+        self._device_mode_combo.setItemText(0, tr("device.mode.phone"))
+        self._device_mode_combo.setItemText(1, tr("device.mode.computer"))
+        self._device_mode_combo.setItemText(2, tr("device.mode.both"))
+        self._sec_device_edit.setText(tr("sec.device_edit"))
+        self._device_edit_combo.setItemText(0, tr("device.edit.phone"))
+        self._device_edit_combo.setItemText(1, tr("device.edit.mac"))
+        self._show_iphone_cb.setText(tr("phone.show_iphone"))
+        self._show_mac_cb.setText(tr("phone.show_mac"))
+        self._sec_mac_model.setText(tr("sec.phone_model"))
+        self._sec_mac_theme.setText(tr("sec.phone_theme"))
+        for i, m in enumerate(MODELS):
+            self._model_combo.setItemText(i, iphone_model_label(m))
+        for i, m in enumerate(MAC_MODELS):
+            self._mac_model_combo.setItemText(i, mac_model_label(m))
+        self._repopulate_theme_combo(select_theme_id=self._canvas.iphone_theme)
+        self._repopulate_mac_theme_combo(select_theme_id=self._canvas.mac_theme)
         self._sec_phone_model.setText(tr("sec.phone_model"))
         self._sec_phone_theme.setText(tr("sec.phone_theme"))
         self._lbl_phone_size.setText(tr("phone.size"))
@@ -945,8 +1031,8 @@ class MainWindow(QMainWindow):
         self._sec_phone_pos.setText(tr("sec.phone_pos"))
         self._center_phone_btn.setText(tr("phone.center"))
         self._center_phone_btn.setToolTip(tr("phone.center_tip"))
-        self._show_phone_cb.setText(tr("phone.show"))
         self._gb_sc.setTitle(tr("group.screen"))
+        self._screen_target_hint.setText(tr("screen.target_hint"))
         self._load_img_btn.setText(tr("screen.load_img"))
         self._load_vid_btn.setText(tr("screen.load_vid"))
         self._clear_content_btn.setText(tr("screen.clear"))
@@ -1078,7 +1164,7 @@ class MainWindow(QMainWindow):
     def _repopulate_theme_combo(self, select_theme_id: Optional[str] = None) -> None:
         model = self._model_combo.currentData()
         model = str(model) if model else (MODELS[0] if MODELS else "")
-        order = list(DEVICE_PNG.get(model, {}).keys())
+        order = list(IPHONE_DEVICE_PNG.get(model, {}).keys())
         self._theme_combo.blockSignals(True)
         self._theme_combo.clear()
         sel = 0
@@ -1097,6 +1183,100 @@ class MainWindow(QMainWindow):
         p = self._canvas._paused
         self._pause_btn.setText(tr("btn.resume") if p else tr("btn.pause"))
         self._tl_play_btn.setText(tr("btn.resume") if p else tr("btn.pause"))
+
+    def _apply_device_mode_ui(self) -> None:
+        mode = self._canvas.device_mode
+        is_both = mode == "both"
+        self._gb_ph.setVisible(mode in ("phone", "both"))
+        self._gb_mac.setVisible(mode in ("computer", "both"))
+        self._sec_device_edit.setVisible(is_both)
+        self._device_edit_combo.setVisible(is_both)
+        self._screen_target_hint.setVisible(is_both)
+        self._show_iphone_cb.blockSignals(True)
+        self._show_mac_cb.blockSignals(True)
+        self._show_iphone_cb.setChecked(self._canvas.show_iphone)
+        self._show_mac_cb.setChecked(self._canvas.show_mac)
+        self._show_iphone_cb.blockSignals(False)
+        self._show_mac_cb.blockSignals(False)
+
+    def _on_device_mode_changed(self, idx: int) -> None:
+        mode = self._device_mode_combo.itemData(idx)
+        if mode not in ("phone", "computer", "both"):
+            return
+        prev = self._canvas.device_mode
+        self._canvas.device_mode = str(mode)
+        if mode == "both" and prev != "both":
+            if (
+                abs(self._canvas.iphone_pos[0] - 0.5) < 0.02
+                and abs(self._canvas.iphone_pos[1] - 0.5) < 0.02
+                and abs(self._canvas.mac_pos[0] - 0.5) < 0.02
+                and abs(self._canvas.mac_pos[1] - 0.5) < 0.02
+            ):
+                self._canvas.iphone_pos = (0.32, 0.52)
+                self._canvas.mac_pos = (0.68, 0.48)
+        self._apply_device_mode_ui()
+        self._sync_device_pos_spinboxes_from_canvas()
+        self._canvas.update()
+
+    def _on_device_edit_target_changed(self, idx: int) -> None:
+        target = self._device_edit_combo.itemData(idx)
+        if target in ("phone", "mac"):
+            self._canvas.device_edit_target = str(target)
+            self._sync_device_pos_spinboxes_from_canvas()
+
+    def _on_canvas_device_edit_target(self, target: str) -> None:
+        if self._canvas.device_mode != "both":
+            return
+        ix = self._device_edit_combo.findData(target)
+        if ix >= 0:
+            self._device_edit_combo.blockSignals(True)
+            self._device_edit_combo.setCurrentIndex(ix)
+            self._device_edit_combo.blockSignals(False)
+        self._sync_device_pos_spinboxes_from_canvas()
+
+    def _on_mac_model_index_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        model = self._mac_model_combo.itemData(idx)
+        if model is None:
+            return
+        model = str(model)
+        self._canvas.mac_model = model
+        self._repopulate_mac_theme_combo(select_theme_id=None)
+        self._canvas.update()
+
+    def _on_mac_theme_index_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        tid = self._mac_theme_combo.itemData(idx)
+        if tid:
+            self._canvas.mac_theme = str(tid)
+            self._canvas.update()
+
+    def _repopulate_mac_theme_combo(self, select_theme_id: str | None) -> None:
+        model = self._canvas.mac_model
+        from .mac_manifest import is_minimal_model
+
+        self._mac_theme_combo.blockSignals(True)
+        self._mac_theme_combo.clear()
+        if is_minimal_model(model):
+            self._mac_theme_combo.addItem(mac_theme_display_name("default"), "default")
+            self._mac_theme_combo.setEnabled(False)
+        else:
+            self._mac_theme_combo.setEnabled(True)
+            order = list(MAC_DEVICE_PNG.get(model, {}).keys())
+            for tid in order:
+                self._mac_theme_combo.addItem(mac_theme_display_name(tid), tid)
+        if select_theme_id:
+            ix = self._mac_theme_combo.findData(select_theme_id)
+            if ix >= 0:
+                self._mac_theme_combo.setCurrentIndex(ix)
+        elif self._mac_theme_combo.count() > 0:
+            self._mac_theme_combo.setCurrentIndex(0)
+            tid = self._mac_theme_combo.currentData()
+            if tid:
+                self._canvas.mac_theme = str(tid)
+        self._mac_theme_combo.blockSignals(False)
 
     def _on_model_index_changed(self, idx: int) -> None:
         if idx < 0:
@@ -1117,26 +1297,77 @@ class MainWindow(QMainWindow):
             self._canvas.iphone_theme = str(tid)
             self._canvas.update()
 
-    def _on_phone_scale_spin(self, val: float) -> None:
-        self._canvas.iphone_scale = val / 100.0
+    def _active_device_target(self) -> str:
+        if self._canvas.device_mode == "computer":
+            return "mac"
+        if self._canvas.device_mode == "both":
+            return self._canvas.device_edit_target
+        return "phone"
+
+    def _on_device_scale_spin(self, val: float) -> None:
+        if self._active_device_target() == "mac":
+            self._canvas.mac_scale = val / 100.0
+        else:
+            self._canvas.iphone_scale = val / 100.0
         self._canvas.update()
 
-    def _on_phone_pos_spin(self) -> None:
+    def _on_device_pos_spin(self) -> None:
         x = self._phone_x_spin.value() / 100.0
         y = self._phone_y_spin.value() / 100.0
-        self._canvas.iphone_pos = (x, y)
+        if self._active_device_target() == "mac":
+            self._canvas.mac_pos = (x, y)
+        else:
+            self._canvas.iphone_pos = (x, y)
         self._canvas.update()
 
-    def _on_center_phone_clicked(self) -> None:
-        self._canvas.center_iphone()
+    def _on_show_iphone_toggled(self, v: bool) -> None:
+        self._canvas.show_iphone = v
+        self._canvas.update()
 
-    def _sync_phone_pos_spinboxes(self, x: float, y: float) -> None:
+    def _on_show_mac_toggled(self, v: bool) -> None:
+        self._canvas.show_mac = v
+        self._canvas.update()
+
+    def _on_phone_scale_spin(self, val: float) -> None:
+        self._on_device_scale_spin(val)
+
+    def _on_phone_pos_spin(self) -> None:
+        self._on_device_pos_spin()
+
+    def _on_center_phone_clicked(self) -> None:
+        self._canvas.center_device()
+
+    def _sync_device_pos_spinboxes_from_canvas(self) -> None:
+        target = self._active_device_target()
+        if target == "mac":
+            scale = self._canvas.mac_scale * 100.0
+            x, y = self._canvas.mac_pos
+        else:
+            scale = self._canvas.iphone_scale * 100.0
+            x, y = self._canvas.iphone_pos
+        self._phone_scale_spin.blockSignals(True)
+        self._phone_x_spin.blockSignals(True)
+        self._phone_y_spin.blockSignals(True)
+        self._phone_scale_spin.setValue(round(scale, 1))
+        self._phone_x_spin.setValue(round(x * 100.0, 2))
+        self._phone_y_spin.setValue(round(y * 100.0, 2))
+        self._phone_scale_spin.blockSignals(False)
+        self._phone_x_spin.blockSignals(False)
+        self._phone_y_spin.blockSignals(False)
+
+    def _sync_device_pos_spinboxes(self, x: float, y: float) -> None:
+        if self._canvas.device_mode == "both":
+            self._sync_device_pos_spinboxes_from_canvas()
+            return
         self._phone_x_spin.blockSignals(True)
         self._phone_y_spin.blockSignals(True)
         self._phone_x_spin.setValue(round(x * 100.0, 2))
         self._phone_y_spin.setValue(round(y * 100.0, 2))
         self._phone_x_spin.blockSignals(False)
         self._phone_y_spin.blockSignals(False)
+
+    def _sync_phone_pos_spinboxes(self, x: float, y: float) -> None:
+        self._sync_device_pos_spinboxes(x, y)
 
     def _rebuild_watermark_panel(self) -> None:
         while self._wm_rows_layout.count():
@@ -1365,14 +1596,6 @@ class MainWindow(QMainWindow):
     def collect_workflow_preset(self) -> dict[str, Any]:
         bg_preset_id = self._preset_combo.currentData()
         fx_preset_id = self._fx_preset_combo.currentData()
-        content_path = None
-        content_type = "none"
-        if self._canvas.video_source_path():
-            content_path = self._canvas.video_source_path()
-            content_type = "video"
-        elif self._canvas.screen_image_path():
-            content_path = self._canvas.screen_image_path()
-            content_type = "image"
         return {
             "ratio_idx": self._ratio_combo.currentIndex(),
             "export": {
@@ -1395,15 +1618,28 @@ class MainWindow(QMainWindow):
                 "preset_id": str(fx_preset_id) if fx_preset_id else None,
                 "breakpoints": list(self._timeline_breakpoints),
             },
+            "device_mode": self._canvas.device_mode,
+            "device_edit_target": self._canvas.device_edit_target,
             "phone": {
-                "model": self._model_combo.currentData(),
-                "theme": self._theme_combo.currentData(),
-                "show": self._show_phone_cb.isChecked(),
-                "scale": self._phone_scale_spin.value(),
-                "x": self._phone_x_spin.value(),
-                "y": self._phone_y_spin.value(),
+                "model": self._canvas.iphone_model,
+                "theme": self._canvas.iphone_theme,
+                "show": self._canvas.show_iphone,
+                "scale": self._canvas.iphone_scale * 100.0,
+                "x": self._canvas.iphone_pos[0] * 100.0,
+                "y": self._canvas.iphone_pos[1] * 100.0,
             },
-            "content": {"type": content_type, "path": content_path},
+            "computer": {
+                "model": self._canvas.mac_model,
+                "theme": self._canvas.mac_theme,
+                "show": self._canvas.show_mac,
+                "scale": self._canvas.mac_scale * 100.0,
+                "x": self._canvas.mac_pos[0] * 100.0,
+                "y": self._canvas.mac_pos[1] * 100.0,
+            },
+            "content": {
+                "phone": self._canvas.phone_screen.to_content_dict(),
+                "mac": self._canvas.mac_screen.to_content_dict(),
+            },
             "watermarks": [
                 self._serialize_watermark(st) for st in self._canvas.watermark_states
             ],
@@ -1412,21 +1648,58 @@ class MainWindow(QMainWindow):
             ],
         }
 
-    def _load_image_from_path(self, path: str) -> bool:
+    def _active_screen_target(self) -> str:
+        return self._canvas.screen_target()
+
+    def _refresh_content_label(self) -> None:
+        parts: list[str] = []
+        ps = self._canvas.phone_screen
+        pp = ps.video_source_path() or ps.image_path()
+        if pp:
+            parts.append(f"{tr('screen.phone_loaded')}: {os.path.basename(pp)}")
+        ms = self._canvas.mac_screen
+        mp = ms.video_source_path() or ms.image_path()
+        if mp:
+            parts.append(f"{tr('screen.mac_loaded')}: {os.path.basename(mp)}")
+        self._content_lbl.setText("  |  ".join(parts) if parts else tr("screen.none"))
+
+    def _apply_content_dict(self, data: dict[str, Any], target: str) -> list[str]:
+        missing: list[str] = []
+        if not isinstance(data, dict):
+            return missing
+        path = data.get("path")
+        ctype = str(data.get("type", "none"))
+        if path and isinstance(path, str):
+            if os.path.isfile(path):
+                if ctype == "video" or (
+                    ctype == "none"
+                    and os.path.splitext(path)[1].lower()
+                    in {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
+                ):
+                    self._load_video_from_path(path, target=target)
+                else:
+                    self._load_image_from_path(path, target=target)
+            else:
+                missing.append(path)
+                self._clear_content(target=target)
+        elif ctype == "none" or not path:
+            self._clear_content(target=target)
+        return missing
+
+    def _load_image_from_path(self, path: str, *, target: str | None = None) -> bool:
         pix = QPixmap(path)
         if pix.isNull():
             return False
-        self._canvas.clear_video()
-        self._canvas.set_screen_image_path(path)
-        self._canvas.screen_pixmap = pix
-        self._content_lbl.setText(os.path.basename(path))
+        tgt = self._canvas.screen_target(target)
+        self._canvas.screen_slot(tgt).set_image(path, pix)
+        self._refresh_content_label()
         return True
 
-    def _load_video_from_path(self, path: str) -> bool:
+    def _load_video_from_path(self, path: str, *, target: str | None = None) -> bool:
         try:
-            self._canvas.set_video(path)
-            self._canvas.set_screen_image_path("")
-            self._content_lbl.setText(os.path.basename(path))
+            tgt = self._canvas.screen_target(target)
+            self._canvas.set_video(path, target=tgt)
+            self._refresh_content_label()
             return True
         except Exception:
             return False
@@ -1474,6 +1747,22 @@ class MainWindow(QMainWindow):
                 self._fx_preset_combo.setCurrentIndex(idx)
             self._apply_effects_code()
 
+        mode = payload.get("device_mode", "phone")
+        if isinstance(mode, str) and mode.strip().lower() in ("phone", "computer", "both"):
+            ix = self._device_mode_combo.findData(mode.strip().lower())
+            if ix >= 0:
+                self._device_mode_combo.setCurrentIndex(ix)
+            self._canvas.device_mode = mode.strip().lower()
+
+        edit = payload.get("device_edit_target", "phone")
+        if isinstance(edit, str) and edit.strip().lower() in ("phone", "mac"):
+            ix = self._device_edit_combo.findData(edit.strip().lower())
+            if ix >= 0:
+                self._device_edit_combo.setCurrentIndex(ix)
+            self._canvas.device_edit_target = edit.strip().lower()
+
+        self._apply_device_mode_ui()
+
         phone = payload.get("phone", {})
         if isinstance(phone, dict):
             idx = self._model_combo.findData(phone.get("model"))
@@ -1482,29 +1771,40 @@ class MainWindow(QMainWindow):
             tidx = self._theme_combo.findData(phone.get("theme"))
             if tidx >= 0:
                 self._theme_combo.setCurrentIndex(tidx)
-            self._show_phone_cb.setChecked(bool(phone.get("show", True)))
-            self._phone_scale_spin.setValue(float(phone.get("scale", 72)))
-            self._phone_x_spin.setValue(float(phone.get("x", 50)))
-            self._phone_y_spin.setValue(float(phone.get("y", 50)))
+            self._canvas.show_iphone = bool(phone.get("show", True))
+            self._canvas.iphone_scale = float(phone.get("scale", 72)) / 100.0
+            self._canvas.iphone_pos = (
+                float(phone.get("x", 50)) / 100.0,
+                float(phone.get("y", 50)) / 100.0,
+            )
+
+        computer = payload.get("computer", {})
+        if isinstance(computer, dict):
+            idx = self._mac_model_combo.findData(computer.get("model"))
+            if idx >= 0:
+                self._mac_model_combo.setCurrentIndex(idx)
+            tidx = self._mac_theme_combo.findData(computer.get("theme"))
+            if tidx >= 0:
+                self._mac_theme_combo.setCurrentIndex(tidx)
+            self._canvas.show_mac = bool(computer.get("show", True))
+            self._canvas.mac_scale = float(computer.get("scale", 58)) / 100.0
+            self._canvas.mac_pos = (
+                float(computer.get("x", 50)) / 100.0,
+                float(computer.get("y", 50)) / 100.0,
+            )
+
+        self._sync_device_pos_spinboxes_from_canvas()
 
         content = payload.get("content", {})
         if isinstance(content, dict):
-            ctype = str(content.get("type", "none"))
-            path = content.get("path")
-            if ctype == "video" and isinstance(path, str) and path:
-                if os.path.isfile(path):
-                    self._load_video_from_path(path)
-                else:
-                    missing.append(path)
-                    self._clear_content()
-            elif ctype.startswith("image") and isinstance(path, str) and path:
-                if os.path.isfile(path):
-                    self._load_image_from_path(path)
-                else:
-                    missing.append(path)
-                    self._clear_content()
+            if "phone" in content or "mac" in content:
+                for key, tgt in (("phone", "phone"), ("mac", "mac")):
+                    sub = content.get(key)
+                    if isinstance(sub, dict):
+                        missing.extend(self._apply_content_dict(sub, tgt))
             else:
-                self._clear_content()
+                missing.extend(self._apply_content_dict(content, self._canvas.screen_target()))
+        self._refresh_content_label()
 
         self._canvas.watermark_states = []
         for item in payload.get("watermarks", []):
@@ -1897,7 +2197,7 @@ class MainWindow(QMainWindow):
         return bool(bg is not None and hasattr(bg, "speed"))
 
     def _update_timeline_visibility(self) -> None:
-        has_video = self._canvas.video_source_path() is not None
+        has_video = self._canvas.has_imported_video()
         self._timeline_bar.setVisible(has_video or self._background_is_animated())
 
     def _add_timeline_breakpoint(self) -> None:
@@ -1980,14 +2280,8 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        pix = QPixmap(path)
-        if pix.isNull():
+        if not self._load_image_from_path(path, target=self._active_screen_target()):
             QMessageBox.warning(self, tr("err.title"), tr("err.load_img"))
-            return
-        self._canvas.clear_video()
-        self._canvas.set_screen_image_path(path)
-        self._canvas.screen_pixmap = pix
-        self._content_lbl.setText(os.path.basename(path))
 
     def _load_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1997,26 +2291,35 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self._canvas.set_video(path)
+            if not self._load_video_from_path(path, target=self._active_screen_target()):
+                raise RuntimeError("video open failed")
             d = self._canvas.imported_video_duration_sec()
             if d is not None and d > 0:
                 self._dur_spin.blockSignals(True)
                 self._dur_spin.setValue(max(1.0, float(d)))
                 self._dur_spin.blockSignals(False)
                 self._on_timeline_duration_changed(self._dur_spin.value())
-            # Align preview/timeline to first frame after import.
             self._canvas.set_time(0.0)
-            self._content_lbl.setText(os.path.basename(path))
             self._update_vid_src_hint()
             self._update_timeline_visibility()
         except Exception as e:
             QMessageBox.warning(self, tr("err.title"), str(e))
 
-    def _clear_content(self) -> None:
-        self._canvas.clear_video()
-        self._canvas.set_screen_image_path("")
-        self._canvas.screen_pixmap = None
-        self._content_lbl.setText(tr("screen.none"))
+    def _on_screen_path_enter(self) -> None:
+        """Handle Enter in the path input — detect image vs video by extension."""
+        path = self._screen_path_input.text().strip()
+        if not path or not os.path.isfile(path):
+            return
+        ext = os.path.splitext(path)[1].lower()
+        video_exts = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
+        if ext in video_exts:
+            self._load_video_from_path(path)
+        else:
+            self._load_image_from_path(path)
+
+    def _clear_content(self, *, target: str | None = None) -> None:
+        self._canvas.clear_screen(target)
+        self._refresh_content_label()
         self._update_vid_src_hint()
         self._update_timeline_visibility()
 

@@ -18,6 +18,7 @@ TangiPromo CLI — 命令行接口。
     list-backgrounds  列出所有可用背景名称及内部名称
     list-resolutions  列出所有分辨率预设
     list-iphones      列出所有 iPhone 型号及主题 ID
+    list-macs         列出电脑模式设备（简约窗口 / MacBook）及主题 ID
 
 示例:
     tangipromo list-backgrounds
@@ -150,6 +151,13 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         help='输出比例，如 16:9 / 9:16 / 1:1 / 4:3 / 4:5 / 21:9',
     )
     parser.add_argument(
+        "--device-mode",
+        metavar="MODE",
+        choices=["phone", "computer", "both"],
+        default=None,
+        help="设备模式：phone / computer / both（同时显示手机与 Mac）",
+    )
+    parser.add_argument(
         "--iphone",
         metavar="MODEL",
         default=None,
@@ -186,13 +194,64 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--no-iphone",
         action="store_true",
         default=False,
-        help="隐藏 iPhone 设备框",
+        help="隐藏 iPhone 设备框（手机模式）",
+    )
+    parser.add_argument(
+        "--mac",
+        metavar="MODEL",
+        default=None,
+        help='电脑设备（如 "MacBook Pro 14"、"Window Dark"）；传 none 关闭设备框',
+    )
+    parser.add_argument(
+        "--mac-theme",
+        metavar="THEME",
+        default=None,
+        help='Mac 主题 id（如 default / menu_bar；简约窗口为 default）',
+    )
+    parser.add_argument(
+        "--mac-scale",
+        type=float,
+        default=None,
+        metavar="0-100",
+        help="电脑设备框缩放百分比（默认 58）",
+    )
+    parser.add_argument(
+        "--mac-x",
+        type=float,
+        default=None,
+        metavar="0-100",
+        help="电脑设备框水平位置百分比（50=居中）",
+    )
+    parser.add_argument(
+        "--mac-y",
+        type=float,
+        default=None,
+        metavar="0-100",
+        help="电脑设备框垂直位置百分比（50=居中）",
+    )
+    parser.add_argument(
+        "--no-mac",
+        action="store_true",
+        default=False,
+        help="隐藏电脑设备框（电脑模式）",
     )
     parser.add_argument(
         "--screen", "-s",
         metavar="PATH",
         default=None,
-        help="屏幕内容：图片或视频文件路径",
+        help="屏幕内容（当前设备模式下的主设备）",
+    )
+    parser.add_argument(
+        "--screen-phone",
+        metavar="PATH",
+        default=None,
+        help="iPhone 屏幕内容：图片或视频",
+    )
+    parser.add_argument(
+        "--screen-mac",
+        metavar="PATH",
+        default=None,
+        help="Mac / 电脑屏幕内容：图片或视频",
     )
     parser.add_argument(
         "--text",
@@ -363,7 +422,10 @@ def _apply_args_to_session(session, args: argparse.Namespace) -> tuple[int, int]
             code_val = open(code_val, encoding="utf-8").read()
         session.set_background_code(code_val)
 
-    # 4. iPhone 设置
+    # 4. 设备模式与框
+    if args.device_mode:
+        session.set_device_mode(args.device_mode)
+
     if args.no_iphone:
         session.set_iphone(visible=False)
     else:
@@ -383,7 +445,30 @@ def _apply_args_to_session(session, args: argparse.Namespace) -> tuple[int, int]
         if iphone_kwargs:
             session.set_iphone(**iphone_kwargs)
 
+    if args.no_mac:
+        session.set_mac(visible=False)
+    else:
+        mac_kwargs: dict = {}
+        if args.mac and args.mac.lower() != "none":
+            mac_kwargs["model"] = args.mac
+        elif args.mac and args.mac.lower() == "none":
+            session.set_mac(visible=False)
+        if args.mac_theme:
+            mac_kwargs["theme"] = args.mac_theme
+        if args.mac_scale is not None:
+            mac_kwargs["scale"] = args.mac_scale
+        if args.mac_x is not None:
+            mac_kwargs["x"] = args.mac_x
+        if args.mac_y is not None:
+            mac_kwargs["y"] = args.mac_y
+        if mac_kwargs:
+            session.set_mac(**mac_kwargs)
+
     # 5. 屏幕内容
+    if args.screen_phone:
+        session.set_screen(args.screen_phone, target="phone")
+    if args.screen_mac:
+        session.set_screen(args.screen_mac, target="mac")
     if args.screen:
         session.set_screen(args.screen)
 
@@ -495,6 +580,22 @@ def cmd_list_iphones(_args: argparse.Namespace) -> int:
         theme_ids = "  |  ".join(themes.keys())
         print(f"\n  --iphone \"{model}\"")
         print(f"    主题(--iphone-theme): {theme_ids}")
+    return 0
+
+
+def cmd_list_macs(_args: argparse.Namespace) -> int:
+    from .mac_manifest import DEVICE_PNG, MINIMAL_MODELS, MODEL_ORDER
+
+    print("可用电脑模式设备:")
+    for model in MODEL_ORDER:
+        if model in MINIMAL_MODELS:
+            print(f'\n  --mac "{model}"')
+            print("    简约窗口（红黄绿交通灯，程序绘制）")
+            continue
+        themes = DEVICE_PNG.get(model, {})
+        theme_ids = "  |  ".join(themes.keys())
+        print(f'\n  --mac "{model}"')
+        print(f"    主题(--mac-theme): {theme_ids}")
     return 0
 
 
@@ -755,6 +856,12 @@ def run_cli() -> None:
         help="列出所有 iPhone 型号及对应主题 ID",
     )
 
+    # --- list-macs ---
+    subparsers.add_parser(
+        "list-macs",
+        help="列出电脑模式设备（简约窗口 / MacBook）及主题 ID",
+    )
+
     # --- list-workflows ---
     p_lw = subparsers.add_parser(
         "list-workflows",
@@ -905,6 +1012,7 @@ def run_cli() -> None:
         "list-backgrounds": cmd_list_backgrounds,
         "list-resolutions": cmd_list_resolutions,
         "list-iphones": cmd_list_iphones,
+        "list-macs": cmd_list_macs,
         "list-workflows": cmd_list_workflows,
         "save-workflow": cmd_save_workflow,
         "save-workflow-preset": cmd_save_workflow_preset,

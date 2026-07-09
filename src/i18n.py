@@ -12,13 +12,24 @@ _current: Locale = "en"
 
 ZH: dict[str, str] = {
     "app.title": "TangiPromo — App 宣发素材生成器",
-    "status.ready": "就绪  |  拖拽 iPhone 或文字图层可移动位置",
+    "status.ready": "就绪  |  拖拽设备或文字图层可移动位置",
     "lang.label": "界面语言",
     "group.workflow": "流程预设",
     "group.ratio": "输出比例",
     "group.bg": "背景预设",
     "group.code": "背景代码",
     "group.phone": "iPhone 模型",
+    "group.mac": "Mac / 电脑模型",
+    "group.device_pos": "位置与尺寸",
+    "sec.device_mode": "设备模式",
+    "device.mode.phone": "手机",
+    "device.mode.computer": "电脑",
+    "device.mode.both": "手机 + 电脑",
+    "sec.device_edit": "编辑目标（双设备模式）",
+    "device.edit.phone": "手机",
+    "device.edit.mac": "Mac / 电脑",
+    "phone.show_iphone": "显示 iPhone",
+    "phone.show_mac": "显示 Mac / 电脑",
     "group.screen": "屏幕内容",
     "group.wm": "水印",
     "group.text": "文字图层",
@@ -78,6 +89,10 @@ ZH: dict[str, str] = {
     "screen.load_vid": "🎬  加载视频",
     "screen.clear": "✕  清除内容",
     "screen.none": "未加载",
+    "screen.target_hint": "加载到当前「编辑目标」；双设备模式可分别为手机与 Mac 设置屏幕内容",
+    "screen.phone_loaded": "iPhone",
+    "screen.mac_loaded": "Mac",
+    "screen.path_ph": "粘贴图片/视频路径，回车加载…",
     "wm.hint": "添加任意本地 PNG（建议透明底）。可多组水印，分别调色与位置；在画布上可拖拽移动。",
     "wm.add": "＋ 添加 PNG 水印…",
     "wm.add_tip": "从本机选择 PNG；路径保存在当前会话，适合开源仓库不包含任何品牌图",
@@ -233,17 +248,36 @@ ZH: dict[str, str] = {
     "iphone.theme.mini_pink": "粉色",
     "iphone.theme.product_red": "红色",
     "iphone.theme.starlight": "星光色",
+    "mac.model.window_dark": "简约窗口（深色）",
+    "mac.model.window_light": "简约窗口（浅色）",
+    "mac.model.macbook_pro_14": "MacBook Pro 14\"（刘海）",
+    "mac.model.macbook_pro_16": "MacBook Pro 16\"（刘海）",
+    "mac.model.macbook_air_13": "MacBook Air 13\"",
+    "mac.model.macbook_air_15": "MacBook Air 15\"",
+    "mac.theme.default": "默认",
+    "mac.theme.menu_bar": "含菜单栏",
 }
 
 EN: dict[str, str] = {
     "app.title": "TangiPromo — App promo studio",
-    "status.ready": "Ready  |  Drag the phone or text layers to move",
+    "status.ready": "Ready  |  Drag the device or text layers to move",
     "lang.label": "Language",
     "group.workflow": "Workflow presets",
     "group.ratio": "Aspect ratio",
     "group.bg": "Background",
     "group.code": "Background code",
     "group.phone": "iPhone",
+    "group.mac": "Mac / computer",
+    "group.device_pos": "Position & size",
+    "sec.device_mode": "Device mode",
+    "device.mode.phone": "Phone",
+    "device.mode.computer": "Computer",
+    "device.mode.both": "Phone + Mac",
+    "sec.device_edit": "Edit target (dual device)",
+    "device.edit.phone": "Phone",
+    "device.edit.mac": "Mac / computer",
+    "phone.show_iphone": "Show iPhone",
+    "phone.show_mac": "Show Mac / computer",
     "group.screen": "Screen content",
     "group.wm": "Watermark",
     "group.text": "Text layers",
@@ -303,6 +337,10 @@ EN: dict[str, str] = {
     "screen.load_vid": "🎬  Load video",
     "screen.clear": "✕  Clear",
     "screen.none": "None",
+    "screen.target_hint": "Loads into the current edit target; in dual mode set phone and Mac separately",
+    "screen.phone_loaded": "iPhone",
+    "screen.mac_loaded": "Mac",
+    "screen.path_ph": "Paste image/video path, Enter to load…",
     "wm.hint": "Add PNG files from disk (transparency recommended). Multiple watermarks; drag on canvas to move.",
     "wm.add": "＋ Add PNG watermark…",
     "wm.add_tip": "Choose a local PNG; path is session-only (no brand assets in repo)",
@@ -455,6 +493,14 @@ EN: dict[str, str] = {
     "iphone.theme.mini_pink": "Pink",
     "iphone.theme.product_red": "(PRODUCT)RED",
     "iphone.theme.starlight": "Starlight",
+    "mac.model.window_dark": "Minimal window (dark)",
+    "mac.model.window_light": "Minimal window (light)",
+    "mac.model.macbook_pro_14": "MacBook Pro 14\" (notch)",
+    "mac.model.macbook_pro_16": "MacBook Pro 16\" (notch)",
+    "mac.model.macbook_air_13": "MacBook Air 13\"",
+    "mac.model.macbook_air_15": "MacBook Air 15\"",
+    "mac.theme.default": "Default",
+    "mac.theme.menu_bar": "With menu bar",
 }
 
 
@@ -503,6 +549,21 @@ def iphone_model_i18n_key(model: str) -> str:
 def iphone_model_label(model: str) -> str:
     k = iphone_model_i18n_key(model)
     return tr(k) if k in ZH or k in EN else model
+
+
+def mac_model_i18n_key(model: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", model.lower()).strip("_")
+    return f"mac.model.{slug}"
+
+
+def mac_model_label(model: str) -> str:
+    k = mac_model_i18n_key(model)
+    return tr(k) if k in ZH or k in EN else model
+
+
+def mac_theme_display_name(theme_id: str) -> str:
+    k = f"mac.theme.{theme_id}"
+    return tr(k) if k in ZH or k in EN else theme_id
 
 
 def theme_display_name(theme_id: str) -> str:

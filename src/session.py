@@ -264,40 +264,93 @@ class PromoSession:
         if visible is not None:
             self._canvas.show_iphone = visible
 
+    def set_device_mode(self, mode: str) -> None:
+        """设备模式：phone / computer / both（同时显示手机与 Mac）。"""
+        m = str(mode).strip().lower()
+        if m in ("phone", "computer", "both"):
+            self._canvas.device_mode = m
+
+    def set_device_edit_target(self, target: str) -> None:
+        """双设备模式下侧栏编辑目标：phone 或 mac。"""
+        t = str(target).strip().lower()
+        if t in ("phone", "mac"):
+            self._canvas.device_edit_target = t
+
+    def set_mac(
+        self,
+        model: Optional[str] = None,
+        theme: Optional[str] = None,
+        scale: Optional[float] = None,
+        x: Optional[float] = None,
+        y: Optional[float] = None,
+        visible: Optional[bool] = None,
+    ) -> None:
+        """配置 Mac / 电脑模式设备框。"""
+        from .mac_manifest import default_theme_for_model
+        if model is not None:
+            self._canvas.mac_model = model
+            if theme is None:
+                self._canvas.mac_theme = default_theme_for_model(model)
+        if theme is not None:
+            self._canvas.mac_theme = theme
+        if scale is not None:
+            self._canvas.mac_scale = scale / 100.0
+        if x is not None:
+            px = x / 100.0
+            py = self._canvas.mac_pos[1]
+            self._canvas.mac_pos = (px, py)
+        if y is not None:
+            px = self._canvas.mac_pos[0]
+            py = y / 100.0
+            self._canvas.mac_pos = (px, py)
+        if visible is not None:
+            self._canvas.show_mac = visible
+
     # ------------------------------------------------------------------
     # 屏幕内容（图片/视频）
     # ------------------------------------------------------------------
 
-    def set_screen(self, path: str) -> None:
+    def set_screen(self, path: str, target: str | None = None) -> None:
         """
-        设置屏幕内容。自动判断图片或视频。
-        path: 本地文件路径
+        设置指定设备的屏幕内容。自动判断图片或视频。
+        target: phone / mac；默认随 device_mode 与 device_edit_target。
         """
+        tgt = self._canvas.screen_target(target)
+        slot = self._canvas.screen_slot(tgt)
         if not path or not os.path.isfile(path):
-            self._canvas.clear_video()
-            self._canvas.set_screen_image_path("")
-            self._canvas.screen_pixmap = None
+            slot.clear()
             return
         ext = os.path.splitext(path)[1].lower()
         video_exts = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
         if ext in video_exts:
-            self._canvas.set_video(path)
-            self._canvas.set_screen_image_path("")
-            vd = self._canvas.imported_video_duration_sec()
+            self._canvas.set_video(path, target=tgt)
+            vd = slot.imported_video_duration_sec()
             if vd is not None and vd > 0:
                 self._export_duration = max(self._export_duration, vd)
         else:
             pix = QPixmap(path)
             if pix.isNull():
                 raise ValueError(f"无法加载图片: {path}")
-            self._canvas.clear_video()
-            self._canvas.set_screen_image_path(path)
-            self._canvas.screen_pixmap = pix
+            slot.set_image(path, pix)
 
-    def clear_screen(self) -> None:
-        self._canvas.clear_video()
-        self._canvas.set_screen_image_path("")
-        self._canvas.screen_pixmap = None
+    def clear_screen(self, target: str | None = None) -> None:
+        self._canvas.clear_screen(target)
+
+    def _apply_content_dict(self, data: dict[str, Any], target: str) -> list[str]:
+        missing: list[str] = []
+        if not isinstance(data, dict):
+            return missing
+        path = data.get("path")
+        ctype = str(data.get("type", "none"))
+        if path and isinstance(path, str):
+            if os.path.isfile(path):
+                self.set_screen(path, target=target)
+            else:
+                missing.append(path)
+                self.clear_screen(target=target)
+        elif ctype == "none" or not path:
+            self.clear_screen(target=target)
+        return missing
 
     # ------------------------------------------------------------------
     # 文字图层
@@ -471,6 +524,15 @@ class PromoSession:
             ]
             self._canvas.region_guide_enabled = bool(eff.get("region_guide", False))
 
+        # 设备模式
+        mode = payload.get("device_mode", "phone")
+        if isinstance(mode, str) and mode.strip().lower() in ("phone", "computer", "both"):
+            self._canvas.device_mode = mode.strip().lower()
+
+        edit = payload.get("device_edit_target", "phone")
+        if isinstance(edit, str) and edit.strip().lower() in ("phone", "mac"):
+            self._canvas.device_edit_target = edit.strip().lower()
+
         # iPhone
         phone = payload.get("phone", {})
         if isinstance(phone, dict):
@@ -489,19 +551,35 @@ class PromoSession:
             y = float(phone.get("y", 50)) / 100.0
             self._canvas.iphone_pos = (x, y)
 
+        computer = payload.get("computer", {})
+        if isinstance(computer, dict):
+            from .mac_manifest import default_theme_for_model
+            model = computer.get("model")
+            theme = computer.get("theme")
+            if model:
+                self._canvas.mac_model = str(model)
+                self._canvas.mac_theme = (
+                    str(theme) if theme else default_theme_for_model(str(model))
+                )
+            self._canvas.show_mac = bool(computer.get("show", True))
+            scale = float(computer.get("scale", 58))
+            self._canvas.mac_scale = scale / 100.0
+            x = float(computer.get("x", 50)) / 100.0
+            y = float(computer.get("y", 50)) / 100.0
+            self._canvas.mac_pos = (x, y)
+
         # 内容
         content = payload.get("content", {})
         if isinstance(content, dict):
-            ctype = str(content.get("type", "none"))
-            path = content.get("path")
-            if path and isinstance(path, str):
-                if os.path.isfile(path):
-                    self.set_screen(path)
-                else:
-                    missing.append(path)
-                    self.clear_screen()
-            elif ctype == "none":
-                self.clear_screen()
+            if "phone" in content or "mac" in content:
+                for key, tgt in (("phone", "phone"), ("mac", "mac")):
+                    sub = content.get(key)
+                    if isinstance(sub, dict):
+                        missing.extend(self._apply_content_dict(sub, tgt))
+            else:
+                missing.extend(
+                    self._apply_content_dict(content, self._canvas.screen_target())
+                )
 
         # 水印
         wm_list = payload.get("watermarks", [])
@@ -636,23 +714,17 @@ class PromoSession:
 
     def collect_payload(self) -> dict[str, Any]:
         """返回当前状态的 workflow payload（与 GUI 格式完全兼容）。"""
-        content_path = None
-        content_type = "none"
-        if self._canvas.video_source_path():
-            content_path = self._canvas.video_source_path()
-            content_type = "video"
-        elif self._canvas.screen_image_path():
-            content_path = self._canvas.screen_image_path()
-            content_type = "image"
-
         px, py = self._canvas.iphone_pos
+        mx, my = self._canvas.mac_pos
         return {
+            "device_mode": self._canvas.device_mode,
+            "device_edit_target": self._canvas.device_edit_target,
             "ratio_idx": next(
                 (i for i, r in enumerate(RATIO_IDX) if r == self._canvas.output_ratio),
                 0,
             ),
             "export": {
-                "format_idx": 2 if self._canvas.video_source_path() else 0,
+                "format_idx": 2 if self._canvas.has_imported_video() else 0,
                 "resolution_key": self._resolution_key,
                 "fps": self._export_fps,
                 "duration": self._export_duration,
@@ -679,7 +751,18 @@ class PromoSession:
                 "x": px * 100.0,
                 "y": py * 100.0,
             },
-            "content": {"type": content_type, "path": content_path},
+            "computer": {
+                "model": self._canvas.mac_model,
+                "theme": self._canvas.mac_theme,
+                "show": self._canvas.show_mac,
+                "scale": self._canvas.mac_scale * 100.0,
+                "x": mx * 100.0,
+                "y": my * 100.0,
+            },
+            "content": {
+                "phone": self._canvas.phone_screen.to_content_dict(),
+                "mac": self._canvas.mac_screen.to_content_dict(),
+            },
             "watermarks": [
                 serialize_watermark(st) for st in self._canvas.watermark_states
             ],
