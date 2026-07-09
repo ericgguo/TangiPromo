@@ -19,6 +19,10 @@ TangiPromo CLI — 命令行接口。
     list-resolutions  列出所有分辨率预设
     list-iphones      列出所有 iPhone 型号及主题 ID
     list-macs         列出电脑模式设备（简约窗口 / MacBook）及主题 ID
+    ai-bridge-status  显示 AI 桥接目录与请求/回复状态
+    ai-snapshot       将当前剪辑状态写入 snapshot.json
+    ai-request        创建自然语言编辑请求（写入 request.json）
+    ai-apply          应用 response.json 中的 patch
 
 示例:
     tangipromo list-backgrounds
@@ -546,8 +550,12 @@ def _apply_args_to_session(session, args: argparse.Namespace) -> tuple[int, int]
 def _init_headless_app() -> None:
     """初始化 offscreen Qt 应用（不显示任何窗口）。"""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QCoreApplication
     from PySide6.QtWidgets import QApplication
     if QApplication.instance() is None:
+        QCoreApplication.setApplicationName("TangiPromo")
+        QCoreApplication.setOrganizationName("TangiPromo")
+        QCoreApplication.setOrganizationDomain("promokit.local")
         QApplication(sys.argv[:1])
 
 
@@ -596,6 +604,99 @@ def cmd_list_macs(_args: argparse.Namespace) -> int:
         theme_ids = "  |  ".join(themes.keys())
         print(f'\n  --mac "{model}"')
         print(f"    主题(--mac-theme): {theme_ids}")
+    return 0
+
+
+def _session_from_args(args: argparse.Namespace):
+    """用 CLI 参数构建 PromoSession（供 ai-* 命令复用）。"""
+    from .session import PromoSession
+
+    _init_headless_app()
+    session = PromoSession()
+    if getattr(args, "workflow_preset", None) or getattr(args, "workflow_id", None) or getattr(args, "workflow", None):
+        from .workflow_cli import load_workflow_sources
+        missing = load_workflow_sources(session, args)
+        for p in missing:
+            print(f"[警告] 文件不存在，已跳过: {p}", file=sys.stderr)
+    try:
+        _apply_args_to_session(session, args)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"[错误] {e}", file=sys.stderr)
+        raise SystemExit(1) from e
+    return session
+
+
+def _write_session_snapshot(session) -> None:
+    from .ai_bridge import build_snapshot, write_snapshot
+
+    payload = session.collect_payload()
+    snap = build_snapshot(
+        payload,
+        session.canvas,
+        preview_time=session.canvas.time,
+        export_duration=session._export_duration,
+        export_fps=session._export_fps,
+    )
+    write_snapshot(snap)
+
+
+def cmd_ai_bridge_status(_args: argparse.Namespace) -> int:
+    from .ai_bridge import bridge_status
+    import json
+
+    st = bridge_status()
+    print(json.dumps(st, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_ai_snapshot(args: argparse.Namespace) -> int:
+    session = _session_from_args(args)
+    _write_session_snapshot(session)
+    from .ai_bridge import bridge_dir
+    print(f"snapshot → {bridge_dir() / 'snapshot.json'}")
+    return 0
+
+
+def cmd_ai_request(args: argparse.Namespace) -> int:
+    from .ai_bridge import build_snapshot, create_request, write_snapshot
+
+    prompt = (args.prompt or "").strip()
+    if not prompt and args.prompt_file:
+        prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
+    if not prompt:
+        print("[错误] 请提供 PROMPT 或 --prompt-file", file=sys.stderr)
+        return 1
+
+    session = _session_from_args(args)
+    payload = session.collect_payload()
+    snap = build_snapshot(
+        payload,
+        session.canvas,
+        preview_time=session.canvas.time,
+        export_duration=session._export_duration,
+        export_fps=session._export_fps,
+    )
+    write_snapshot(snap)
+    req = create_request(prompt, snap)
+    print(f"request id: {req['id']}")
+    return 0
+
+
+def cmd_ai_apply(args: argparse.Namespace) -> int:
+    from .ai_bridge import apply_response, read_response
+
+    session = _session_from_args(args)
+    resp = read_response()
+    if resp is None and args.response_file:
+        import json
+        resp = json.loads(Path(args.response_file).read_text(encoding="utf-8"))
+    applied, err = apply_response(session.canvas, resp)
+    if err:
+        print(f"[错误] {err}", file=sys.stderr)
+        return 1
+    print("已应用:", ", ".join(applied) or "(无字段)")
+    if session.canvas.effect_error:
+        print(f"[警告] 效果代码: {session.canvas.effect_error}", file=sys.stderr)
     return 0
 
 
@@ -1000,6 +1101,48 @@ def run_cli() -> None:
         help="输出文件路径（.mp4）",
     )
 
+    # --- ai-bridge-status ---
+    subparsers.add_parser("ai-bridge-status", help="显示 AI 桥接目录与请求/回复状态")
+
+    # --- ai-snapshot ---
+    p_ais = subparsers.add_parser(
+        "ai-snapshot",
+        help="将当前剪辑状态写入 ai_bridge/snapshot.json",
+    )
+    _add_common_args(p_ais)
+
+    # --- ai-request ---
+    p_air = subparsers.add_parser(
+        "ai-request",
+        help="创建自然语言编辑请求（写入 request.json + snapshot.json）",
+    )
+    _add_common_args(p_air)
+    p_air.add_argument(
+        "prompt",
+        nargs="?",
+        default=None,
+        help="自然语言编辑需求",
+    )
+    p_air.add_argument(
+        "--prompt-file",
+        metavar="PATH",
+        default=None,
+        help="从文件读取编辑需求",
+    )
+
+    # --- ai-apply ---
+    p_aia = subparsers.add_parser(
+        "ai-apply",
+        help="应用 ai_bridge/response.json 中的 patch",
+    )
+    _add_common_args(p_aia)
+    p_aia.add_argument(
+        "--response-file",
+        metavar="PATH",
+        default=None,
+        help="使用指定 response JSON（默认 ai_bridge/response.json）",
+    )
+
     # --- gui ---
     subparsers.add_parser(
         "gui",
@@ -1021,6 +1164,10 @@ def run_cli() -> None:
         "workflow-import": cmd_workflow_import,
         "export-image": cmd_export_image,
         "export-video": cmd_export_video,
+        "ai-bridge-status": cmd_ai_bridge_status,
+        "ai-snapshot": cmd_ai_snapshot,
+        "ai-request": cmd_ai_request,
+        "ai-apply": cmd_ai_apply,
         "gui": cmd_gui,
     }
 

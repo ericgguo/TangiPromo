@@ -170,6 +170,7 @@ class Canvas(QWidget):
         if not self._export_active:
             for slot in (self.phone_screen, self.mac_screen):
                 if slot.video_cap:
+                    slot.reset_preview_sync()
                     slot.seek_to_time(self.time)
         self.time_changed.emit(self.time)
         self.update()
@@ -601,7 +602,7 @@ class Canvas(QWidget):
             has_video = False
             if not self._export_active:
                 for slot in (self.phone_screen, self.mac_screen):
-                    if slot.video_cap and slot.advance_video():
+                    if slot.video_cap:
                         has_video = True
             if has_video:
                 fps = max(
@@ -612,6 +613,10 @@ class Canvas(QWidget):
                 dur = self.imported_video_duration_sec()
                 if dur is not None and dur > 0 and self.time >= dur:
                     self.time = self.time % dur
+                if not self._export_active:
+                    for slot in (self.phone_screen, self.mac_screen):
+                        if slot.video_cap:
+                            slot.sync_preview_at(self.time)
             else:
                 self.time += 1.0 / 60.0
             self.time_changed.emit(self.time)

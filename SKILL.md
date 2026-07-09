@@ -393,6 +393,84 @@ zoom_region(0.1, 0.2, 0.8, 0.6, scale=1.0 + 0.3 * t / duration)
 
 ---
 
+## Step 7 — AI edit bridge (GUI tab + CLI)
+
+TangiPromo can hand off **natural-language edit requests** to a local Agent (Cursor, etc.) via a **file protocol** — no GUI vision or screen capture needed.
+
+### Bridge folder
+
+Default location (macOS, with TangiPromo org/app name):
+
+```
+~/Library/Application Support/TangiPromo/TangiPromo/ai_bridge/
+```
+
+Override with env var `TANGIPROMO_DATA_DIR` (parent of `ai_bridge/`).
+
+| File | Who writes | Purpose |
+|------|------------|---------|
+| `snapshot.json` | GUI / CLI | Full clip state: workflow, device layout, export hints |
+| `request.json` | GUI / CLI | User prompt + request id |
+| `response.json` | **Agent** | Patch to apply (effects code, breakpoints, duration, …) |
+| `bridge.log` | both | Append log — `tail -f` in terminal |
+
+### Agent workflow
+
+1. User clicks **「生成 AI 请求」** in the GUI **AI 编辑** tab, or runs CLI `ai-request`.
+2. Agent reads `snapshot.json` + `request.json` (and optionally `tail -f bridge.log`).
+3. Agent writes `response.json`:
+
+```json
+{
+  "request_id": "<uuid from request.json id>",
+  "summary": "Smooth zoom to phone at 3s, hold 2s, zoom back",
+  "patch": {
+    "effects": {
+      "enabled": true,
+      "code": "# use layout.phone.screen x,y,w,h from snapshot\nif 3.0 <= t <= 4.0:\n    p = (t - 3.0)\n    zoom_region(px, py, pw, ph, 1.0 + 0.3 * p)",
+      "breakpoints": [3.0, 5.8],
+      "region_guide": false
+    },
+    "export": { "duration": 10.0 }
+  }
+}
+```
+
+4. User clicks **「应用 AI 回复」** in GUI, or runs `ai-apply`. On success, `response.json` is **deleted** (no trace left).
+
+**Important:** Use normalized coordinates from `snapshot.layout.phone.screen` (or `layout.mac.screen`) for `zoom_region(x, y, w, h, scale)` — do **not** hard-code `0.5, 0.5` unless the device is centered that way in the snapshot.
+
+### CLI commands
+
+```bash
+# Show bridge path and pending/applied status
+python main.py ai-bridge-status
+
+# Write snapshot only (optional; ai-request also writes it)
+python main.py ai-snapshot --workflow-preset "my_showcase"
+
+# Create request from current CLI flags / workflow
+python main.py ai-request "At 3s smooth zoom to phone, hold 2s, zoom back" \
+  --workflow-preset "my_showcase"
+
+# Apply response.json (or --response-file PATH)
+python main.py ai-apply --workflow-preset "my_showcase"
+```
+
+All `ai-*` commands accept the same `--background`, `--workflow-preset`, `--device-mode`, `--screen-phone`, `--screen-mac`, etc. as export commands so the snapshot matches what you intend to edit.
+
+### Patch fields (supported today)
+
+| Path | Type | Notes |
+|------|------|-------|
+| `patch.effects.enabled` | bool | Turn effect layer on/off |
+| `patch.effects.code` | string | Python effect code (see Step 5) |
+| `patch.effects.breakpoints` | float[] | Timeline markers |
+| `patch.effects.region_guide` | bool | Show region crosshair overlay |
+| `patch.export.duration` | float | Export / timeline duration (seconds) |
+
+---
+
 ## Quick-reference cheatsheet
 
 ```bash
@@ -431,4 +509,9 @@ python main.py save-workflow \
 # Export from saved workflow
 python main.py export-image --workflow aurora_16x9.json out.png
 python main.py export-video --workflow aurora_16x9.json --duration 8 out.mp4
+
+# AI edit bridge
+python main.py ai-bridge-status
+python main.py ai-request "Smooth zoom to phone at 3s" --workflow-preset "my_showcase"
+python main.py ai-apply --workflow-preset "my_showcase"
 ```

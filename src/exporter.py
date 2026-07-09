@@ -77,7 +77,7 @@ class _SlotExportVideo:
     def sync_at(self, t: float) -> None:
         if self.cap is None:
             return
-        tt = self._clamp(t)
+        tt = self._clamp(self.slot.video_time_at(t))
         target_idx = int(tt * self.fps + 0.5)
         while self.current_idx is not None and self.current_idx < target_idx and not self.eof:
             ret, frame = self.cap.read()

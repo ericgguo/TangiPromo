@@ -30,6 +30,13 @@ from .mac_manifest import DEVICE_PNG as MAC_DEVICE_PNG
 from .text_layer import TextLayer
 from .watermark import make_watermark_from_path
 from .workflow_preset_store import WorkflowPresetStore
+from .ai_bridge import (
+    apply_response,
+    bridge_dir,
+    bridge_status,
+    build_snapshot,
+    create_request,
+)
 from .i18n import (
     EN,
     RESOLUTION_I18N_KEY,
@@ -722,6 +729,42 @@ class MainWindow(QMainWindow):
         lay.addStretch()
         self._right_tabs.addTab(effects_page, tr("tab.effects"))
 
+        # ── Tab: AI Edit ────────────────────────────────────────────────
+        ai_page, lay_ai = _page_scroll()
+        self._gb_ai, vl_ai = _group(tr("tab.ai"))
+        self._ai_hint = QLabel(tr("ai.hint"))
+        self._ai_hint.setWordWrap(True)
+        self._ai_hint.setStyleSheet("color:#8a8a93;font-size:11.5px;")
+        vl_ai.addWidget(self._ai_hint)
+        self._ai_prompt = QTextEdit()
+        self._ai_prompt.setMinimumHeight(100)
+        self._ai_prompt.setPlaceholderText(tr("ai.prompt_ph"))
+        vl_ai.addWidget(self._ai_prompt)
+        ai_btn_row = QWidget()
+        ai_btn_lay = QHBoxLayout(ai_btn_row)
+        ai_btn_lay.setContentsMargins(0, 0, 0, 0)
+        self._ai_request_btn = QPushButton(tr("ai.btn_request"))
+        self._ai_request_btn.setObjectName("primaryBtn")
+        self._ai_apply_btn = QPushButton(tr("ai.btn_apply"))
+        self._ai_status_btn = QPushButton(tr("ai.btn_status"))
+        self._ai_status_btn.setObjectName("ghostBtn")
+        ai_btn_lay.addWidget(self._ai_request_btn)
+        ai_btn_lay.addWidget(self._ai_apply_btn)
+        ai_btn_lay.addWidget(self._ai_status_btn)
+        vl_ai.addWidget(ai_btn_row)
+        self._ai_path_lbl = QLabel(f"{tr('ai.path_label')}: {bridge_dir()}")
+        self._ai_path_lbl.setWordWrap(True)
+        self._ai_path_lbl.setStyleSheet("color:#6a6a73;font-size:11px;")
+        vl_ai.addWidget(self._ai_path_lbl)
+        self._ai_status_lbl = QLabel(tr("ai.status_none"))
+        self._ai_status_lbl.setStyleSheet("color:#8a8a93;font-size:11.5px;")
+        self._ai_status_lbl.setWordWrap(True)
+        vl_ai.addWidget(self._ai_status_lbl)
+        lay_ai.addWidget(self._gb_ai)
+        lay_ai.addStretch()
+        self._right_tabs.addTab(ai_page, tr("tab.ai"))
+        self._refresh_ai_status()
+
         # ── Tab: Export ─────────────────────────────────────────────────
         export_page, lay = _page_scroll()
         self._gb_exp, vl_exp = _group(tr("group.export"))
@@ -927,6 +970,10 @@ class MainWindow(QMainWindow):
         self._fx_preset_save_btn.clicked.connect(self._save_effect_preset)
         self._fx_preset_del_btn.clicked.connect(self._delete_effect_preset)
 
+        self._ai_request_btn.clicked.connect(self._on_ai_create_request)
+        self._ai_apply_btn.clicked.connect(self._on_ai_apply_response)
+        self._ai_status_btn.clicked.connect(self._on_ai_show_status)
+
         self._preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
         self._preset_save_btn.clicked.connect(self._save_custom_preset)
         self._preset_del_btn.clicked.connect(self._delete_custom_preset)
@@ -965,7 +1012,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_right_tabs"):
             right_labels = [
                 tr("tab.device"), tr("tab.layers"),
-                tr("tab.effects"), tr("tab.export"),
+                tr("tab.effects"), tr("tab.ai"), tr("tab.export"),
             ]
             for i, label in enumerate(right_labels):
                 if i < self._right_tabs.count():
@@ -1094,6 +1141,14 @@ class MainWindow(QMainWindow):
         self._fx_help_lbl.setText(tr("effects.help"))
         self._fx_code_edit.setPlaceholderText(tr("effects.code_ph"))
         self._fx_apply_btn.setText(tr("effects.apply"))
+        self._gb_ai.setTitle(tr("tab.ai"))
+        self._ai_hint.setText(tr("ai.hint"))
+        self._ai_prompt.setPlaceholderText(tr("ai.prompt_ph"))
+        self._ai_request_btn.setText(tr("ai.btn_request"))
+        self._ai_apply_btn.setText(tr("ai.btn_apply"))
+        self._ai_status_btn.setText(tr("ai.btn_status"))
+        self._ai_path_lbl.setText(f"{tr('ai.path_label')}: {bridge_dir()}")
+        self._refresh_ai_status()
         self._update_vid_src_hint()
         self._sync_timeline_from_canvas()
         self._refresh_breakpoint_combo()
@@ -1667,6 +1722,7 @@ class MainWindow(QMainWindow):
         missing: list[str] = []
         if not isinstance(data, dict):
             return missing
+        freeze_ranges = data.get("freeze_ranges", [])
         path = data.get("path")
         ctype = str(data.get("type", "none"))
         if path and isinstance(path, str):
@@ -1677,6 +1733,16 @@ class MainWindow(QMainWindow):
                     in {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
                 ):
                     self._load_video_from_path(path, target=target)
+                    if isinstance(freeze_ranges, list):
+                        parsed: list[tuple[float, float]] = []
+                        for it in freeze_ranges:
+                            if not isinstance(it, (list, tuple)) or len(it) < 2:
+                                continue
+                            try:
+                                parsed.append((float(it[0]), float(it[1])))
+                            except (TypeError, ValueError):
+                                continue
+                        self._canvas.screen_slot(target).set_freeze_ranges(parsed)
                 else:
                     self._load_image_from_path(path, target=target)
             else:
@@ -2264,6 +2330,95 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, tr("err.title"), tr("effects.err", err=self._canvas.effect_error)
             )
+
+    # ------------------------------------------------------------------
+    # AI bridge
+    # ------------------------------------------------------------------
+
+    def _refresh_ai_status(self) -> None:
+        if not hasattr(self, "_ai_path_lbl"):
+            return
+        bd = bridge_dir()
+        self._ai_path_lbl.setText(f"{tr('ai.path_label')}: {bd}")
+        st = bridge_status()
+        if st.get("has_request") and not st.get("has_response"):
+            self._ai_status_lbl.setText(tr("ai.status_pending"))
+        elif st.get("has_response"):
+            summary = st.get("response_summary") or ""
+            self._ai_status_lbl.setText(
+                f"{tr('ai.status_pending')} — {summary}".strip(" —")
+            )
+        else:
+            self._ai_status_lbl.setText(tr("ai.status_none"))
+
+    def _sync_ai_patch_to_ui(self, patch: dict[str, Any], _applied: list[str]) -> None:
+        eff = patch.get("effects")
+        if isinstance(eff, dict):
+            if "enabled" in eff:
+                self._fx_enable_cb.blockSignals(True)
+                self._fx_enable_cb.setChecked(bool(eff["enabled"]))
+                self._fx_enable_cb.blockSignals(False)
+            if "region_guide" in eff:
+                self._fx_region_guide_cb.blockSignals(True)
+                self._fx_region_guide_cb.setChecked(bool(eff["region_guide"]))
+                self._fx_region_guide_cb.blockSignals(False)
+            if "code" in eff:
+                self._fx_code_edit.blockSignals(True)
+                self._fx_code_edit.setPlainText(str(eff["code"]))
+                self._fx_code_edit.blockSignals(False)
+            if "breakpoints" in eff:
+                self._timeline_breakpoints = [float(x) for x in eff["breakpoints"]]
+                self._refresh_breakpoint_combo()
+                self._canvas.effect_breakpoints = list(self._timeline_breakpoints)
+        exp = patch.get("export")
+        if isinstance(exp, dict) and "duration" in exp:
+            self._dur_spin.blockSignals(True)
+            self._dur_spin.setValue(float(exp["duration"]))
+            self._dur_spin.blockSignals(False)
+            self._on_timeline_duration_changed(self._dur_spin.value())
+        self._apply_effects_code()
+
+    def _on_ai_create_request(self) -> None:
+        prompt = self._ai_prompt.toPlainText().strip()
+        if not prompt:
+            QMessageBox.warning(self, tr("err.title"), tr("ai.err_empty"))
+            return
+        payload = self.collect_workflow_preset()
+        snap = build_snapshot(
+            payload,
+            self._canvas,
+            preview_time=self._canvas.time,
+            export_duration=self._timeline_duration(),
+            export_fps=self._fps_spin.value(),
+        )
+        create_request(prompt, snap)
+        self._refresh_ai_status()
+        QMessageBox.information(self, tr("tab.ai"), tr("ai.ok_request"))
+
+    def _on_ai_apply_response(self) -> None:
+        applied, err = apply_response(
+            self._canvas,
+            on_ui_sync=self._sync_ai_patch_to_ui,
+        )
+        if err:
+            QMessageBox.warning(self, tr("err.title"), err)
+            return
+        self._refresh_ai_status()
+        if self._canvas.effect_error:
+            QMessageBox.warning(
+                self, tr("err.title"), tr("effects.err", err=self._canvas.effect_error)
+            )
+        else:
+            QMessageBox.information(self, tr("tab.ai"), tr("ai.ok_apply"))
+
+    def _on_ai_show_status(self) -> None:
+        import json
+        st = bridge_status()
+        QMessageBox.information(
+            self,
+            tr("tab.ai"),
+            json.dumps(st, ensure_ascii=False, indent=2),
+        )
 
     # ------------------------------------------------------------------
     # iPhone / scale

@@ -336,15 +336,34 @@ class PromoSession:
     def clear_screen(self, target: str | None = None) -> None:
         self._canvas.clear_screen(target)
 
+    def set_screen_freeze_ranges(
+        self, target: str, ranges: list[list[float] | tuple[float, float]]
+    ) -> None:
+        tgt = self._canvas.screen_target(target)
+        parsed: list[tuple[float, float]] = []
+        for it in ranges:
+            if not isinstance(it, (list, tuple)) or len(it) < 2:
+                continue
+            try:
+                s = float(it[0])
+                e = float(it[1])
+            except (TypeError, ValueError):
+                continue
+            parsed.append((s, e))
+        self._canvas.screen_slot(tgt).set_freeze_ranges(parsed)
+
     def _apply_content_dict(self, data: dict[str, Any], target: str) -> list[str]:
         missing: list[str] = []
         if not isinstance(data, dict):
             return missing
+        freeze_ranges = data.get("freeze_ranges", [])
         path = data.get("path")
         ctype = str(data.get("type", "none"))
         if path and isinstance(path, str):
             if os.path.isfile(path):
                 self.set_screen(path, target=target)
+                if isinstance(freeze_ranges, list):
+                    self.set_screen_freeze_ranges(target, freeze_ranges)
             else:
                 missing.append(path)
                 self.clear_screen(target=target)
